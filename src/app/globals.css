@@ -1,0 +1,1861 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --surface-1: rgba(8, 11, 18, .82);
+  --surface-2: rgba(10, 17, 28, .72);
+  --line-soft: rgba(255,255,255,.08);
+  --line-hard: rgba(255,255,255,.16);
+  --radius-panel: 22px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: #03050A;
+  color: #F4F7FB;
+  overflow: hidden;
+  font-family: Geist, "Satoshi", "General Sans", "Neue Montreal", "Inter Tight", Inter, "SF Pro Display", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, a { cursor: pointer; }
+::selection { background: rgba(24,255,139,.25); color: white; }
+
+.kau-shell {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(24,255,139,.105), transparent 30%),
+    radial-gradient(circle at 78% 10%, rgba(168,85,247,.13), transparent 28%),
+    radial-gradient(circle at 38% 72%, rgba(24,215,255,.055), transparent 34%),
+    linear-gradient(180deg, #05070D 0%, #03050A 48%, #020308 100%);
+  position: relative;
+}
+
+.tactical-panel {
+  position: relative;
+  border: 1px solid rgba(255,255,255,.10);
+  background: linear-gradient(180deg, rgba(12,18,31,.82), rgba(5,7,13,.74));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 24px 80px rgba(0,0,0,.35);
+  overflow: hidden;
+}
+
+.tactical-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(110deg, transparent, rgba(255,255,255,.055), transparent);
+  transform: translateX(-120%);
+  animation: scan 8s linear infinite;
+}
+
+.tactical-panel > * { position: relative; z-index: 1; }
+
+.noise::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: .032;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+}
+
+.money-text { text-shadow: 0 0 22px rgba(24,255,139,.45); }
+.danger-text { text-shadow: 0 0 22px rgba(255,59,79,.42); }
+.cyan-text { text-shadow: 0 0 22px rgba(24,215,255,.42); }
+
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { scrollbar-width: none; }
+
+@keyframes scan {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+
+
+/* KAU V3.1 Performance Layer
+   Visual identity stays the same; expensive runtime work is moved to compositor-friendly CSS. */
+.gpu-layer {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+
+.layout-contain {
+  contain: layout paint style;
+}
+
+.paint-contain {
+  contain: paint;
+}
+
+.operational-environment {
+  contain: strict;
+  transform: translateZ(0);
+  isolation: isolate;
+}
+
+.ambient-blob {
+  transform: translateZ(0);
+  will-change: opacity;
+}
+
+.ambient-blob-money { animation: ambientMoney 8s ease-in-out infinite; }
+.ambient-blob-purple { animation: ambientPurple 10s ease-in-out infinite; }
+.ambient-blob-cyan { animation: ambientCyan 9s ease-in-out infinite; }
+
+.operational-scanline {
+  transform: translate3d(0,0,0);
+  animation: operationalScanline 7s linear infinite;
+}
+
+.operational-particle {
+  transform: translate3d(0,0,0);
+  animation-name: particleFloat;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.reactor-orbit-fast {
+  transform-origin: center;
+  animation: orbitFast 36s linear infinite;
+}
+
+.reactor-orbit-slow {
+  transform-origin: center;
+  animation: orbitSlow 44s linear infinite;
+}
+
+.reactor-pulse {
+  animation: reactorPulse 2.2s ease-in-out infinite;
+}
+
+.reactor-bar {
+  transform-origin: bottom;
+  animation-name: reactorBar;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.ai-orbit {
+  animation: orbitFast 14s linear infinite;
+}
+
+.ai-core-pulse {
+  animation: aiCorePulse 2.6s ease-in-out infinite;
+}
+
+.critical-pulse {
+  animation: criticalPulse 1.9s ease-in-out infinite;
+}
+
+.money-alert-ring {
+  animation: moneyAlertRing 2.1s ease-in-out infinite;
+}
+
+.money-alert-glow {
+  animation: moneyAlertGlow 2.1s ease-in-out infinite;
+}
+
+.follow-ring {
+  animation: orbitFast 9s linear infinite;
+}
+
+.wave-bar {
+  transform-origin: bottom;
+  animation-name: waveBar;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.tactical-panel,
+.tactical-card,
+.command-card {
+  transform: translateZ(0);
+}
+
+@keyframes ambientMoney {
+  0%, 100% { opacity: .25; }
+  50% { opacity: .55; }
+}
+@keyframes ambientPurple {
+  0%, 100% { opacity: .24; transform: translate3d(0,0,0); }
+  50% { opacity: .58; transform: translate3d(-18px,0,0); }
+}
+@keyframes ambientCyan {
+  0%, 100% { opacity: .18; transform: translate3d(0,0,0); }
+  50% { opacity: .45; transform: translate3d(0,-24px,0); }
+}
+@keyframes operationalScanline {
+  0% { transform: translate3d(0,0,0); opacity: 0; }
+  14% { opacity: .7; }
+  52% { opacity: .7; }
+  100% { transform: translate3d(0,720px,0); opacity: 0; }
+}
+@keyframes particleFloat {
+  0%,100% { opacity: .05; transform: translate3d(0,0,0); }
+  50% { opacity: .75; transform: translate3d(0,-22px,0); }
+}
+@keyframes orbitFast {
+  from { transform: translate3d(-50%,-50%,0) rotate(0deg); }
+  to { transform: translate3d(-50%,-50%,0) rotate(360deg); }
+}
+@keyframes orbitSlow {
+  from { transform: translate3d(-50%,-50%,0) rotate(0deg); }
+  to { transform: translate3d(-50%,-50%,0) rotate(-360deg); }
+}
+@keyframes reactorPulse {
+  0%,100% { opacity: .13; transform: translate3d(-50%,-50%,0) scale(.95); }
+  50% { opacity: .50; transform: translate3d(-50%,-50%,0) scale(1.20); }
+}
+@keyframes reactorBar {
+  0%,100% { opacity: .36; transform: scaleY(.58); }
+  50% { opacity: 1; transform: scaleY(1); }
+}
+@keyframes aiCorePulse {
+  0%,100% { opacity: .14; transform: scale(.88); }
+  50% { opacity: .42; transform: scale(1.08); }
+}
+@keyframes criticalPulse {
+  0%,100% { opacity: .70; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+@keyframes moneyAlertRing {
+  0%,100% { opacity: .48; transform: scale(1); }
+  50% { opacity: .9; transform: scale(1.08); }
+}
+@keyframes moneyAlertGlow {
+  0%,100% { opacity: .10; transform: scale(.82); }
+  50% { opacity: .42; transform: scale(1.14); }
+}
+@keyframes waveBar {
+  0%,100% { opacity: .45; transform: scaleY(.52); }
+  50% { opacity: 1; transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+.spin-self { animation: spinSelf 14s linear infinite; }
+@keyframes spinSelf { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* KAU V4.2.9 - dark native controls */
+select,
+input[type="date"] {
+  color-scheme: dark;
+}
+
+select option {
+  background: #070b12;
+  color: #edf7ff;
+}
+
+select option:checked,
+select option:hover {
+  background: #0b2f3b;
+  color: #ffffff;
+}
+
+/* KAU V4.2.26 - Sales Arena controls */
+.arena-button {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.04);
+  padding: .5rem .75rem;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: rgba(255,255,255,.58);
+  transition: color .2s ease, background .2s ease, border-color .2s ease, transform .2s ease;
+}
+.arena-button:hover {
+  color: white;
+  background: rgba(255,255,255,.08);
+  transform: translateY(-1px);
+}
+
+/* KAU v4.2.62 - executive finance surface system */
+:root {
+  --kau-space-1: 4px;
+  --kau-space-2: 8px;
+  --kau-space-3: 12px;
+  --kau-space-4: 16px;
+  --kau-space-5: 20px;
+  --kau-space-6: 24px;
+  --kau-finance-bg-0: #05070F;
+  --kau-finance-bg-1: #060816;
+  --kau-finance-surface-1: rgba(10, 15, 25, .72);
+  --kau-finance-line: rgba(148, 163, 184, .075);
+  --kau-finance-line-soft: rgba(148, 163, 184, .045);
+}
+
+.premium-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.premium-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+}
+.premium-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border: 3px solid rgba(5, 7, 15, 0.88);
+  border-radius: 999px;
+}
+.premium-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.28);
+}
+.premium-scrollbar {
+  scrollbar-color: rgba(148, 163, 184, 0.18) rgba(15, 23, 42, 0.18);
+  scrollbar-width: thin;
+}
+
+.finance-shell {
+  isolation: isolate;
+  font-family: Geist, Inter, "SF Pro Display", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.finance-shell::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 35px;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.036), transparent 24%, rgba(255,255,255,.014) 72%, transparent),
+    radial-gradient(circle at 50% 0%, rgba(255,255,255,.045), transparent 36%);
+  opacity: .92;
+}
+.finance-shell::after {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: -30px;
+  height: 86px;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(15,23,42,.42), transparent 68%);
+  filter: blur(20px);
+}
+.finance-movement-row {
+  animation: financeRowIn .30s cubic-bezier(.22,1,.36,1) both;
+  will-change: opacity, transform;
+}
+.finance-movement-row:hover {
+  transform: translateY(-1px) scale(1.001);
+}
+@keyframes financeRowIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 768px) {
+  .finance-shell { padding: 1.25rem; border-radius: 28px; }
+  .finance-shell::before { border-radius: 27px; }
+}
+
+
+/* KAU v4.2.67 Luxury Operational System polish */
+.kau-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255,255,255,.014) 1px, transparent 1px);
+  background-size: 96px 96px;
+  mask-image: radial-gradient(circle at 52% 20%, black 0%, transparent 76%);
+  opacity: .46;
+}
+
+.kau-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(255,255,255,.065), transparent 35%),
+    radial-gradient(circle at 86% 34%, rgba(168,85,247,.075), transparent 34%),
+    radial-gradient(circle at 8% 72%, rgba(20,184,166,.06), transparent 34%),
+    linear-gradient(180deg, transparent 0%, rgba(0,0,0,.18) 100%);
+}
+
+.luxury-surface {
+  position: relative;
+  border: 1px solid rgba(148,163,184,.105);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(20,184,166,.10), transparent 32%),
+    radial-gradient(circle at 92% 10%, rgba(168,85,247,.11), transparent 35%),
+    linear-gradient(180deg, rgba(12,18,31,.83), rgba(5,7,13,.80));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.075),
+    inset 0 -1px 0 rgba(255,255,255,.035),
+    0 24px 90px rgba(0,0,0,.34);
+}
+
+.luxury-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 0%, rgba(255,255,255,.055) 46%, transparent 62%);
+  transform: translateX(-135%);
+  opacity: .55;
+  animation: luxurySweep 11s ease-in-out infinite;
+}
+
+.luxury-surface > * { position: relative; z-index: 1; }
+
+.executive-card {
+  background:
+    radial-gradient(circle at 84% 12%, rgba(255,255,255,.12), transparent 23%),
+    linear-gradient(135deg, rgba(255,255,255,.065), transparent 54%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -1px 0 rgba(255,255,255,.035),
+    0 22px 70px rgba(0,0,0,.28);
+}
+
+.finance-movement-row { animation: financeRowEnter .32s ease-out both; }
+.finance-movement-row:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.035), inset 0 -1px 0 rgba(255,255,255,.025); }
+
+.premium-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.premium-scrollbar::-webkit-scrollbar-track { background: rgba(148,163,184,.045); border-radius: 999px; }
+.premium-scrollbar::-webkit-scrollbar-thumb { background: rgba(148,163,184,.22); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+.premium-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.35); background-clip: padding-box; }
+.premium-scrollbar { scrollbar-color: rgba(148,163,184,.28) rgba(148,163,184,.05); scrollbar-width: thin; }
+
+@keyframes luxurySweep {
+  0%, 72% { transform: translateX(-135%); opacity: 0; }
+  82% { opacity: .55; }
+  100% { transform: translateX(135%); opacity: 0; }
+}
+@keyframes financeRowEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* KAU v4.2.68 Unicorn-grade cinematic polish */
+:root {
+  --kau-black: #020409;
+  --kau-graphite: #070A12;
+  --kau-panel: rgba(8, 13, 23, .88);
+  --kau-border: rgba(148, 163, 184, .10);
+  --kau-cyan: #67E8F9;
+  --kau-teal: #2DD4BF;
+  --kau-money: #34D399;
+  --kau-amber: #FBBF24;
+  --kau-risk: #FB7185;
+}
+
+.kau-unicorn-bg {
+  background:
+    radial-gradient(circle at 50% -18%, rgba(255,255,255,.055), transparent 30%),
+    radial-gradient(circle at 12% 8%, rgba(45,212,191,.075), transparent 28%),
+    radial-gradient(circle at 88% 10%, rgba(99,102,241,.055), transparent 30%),
+    linear-gradient(180deg, #020409 0%, #050712 46%, #020409 100%);
+}
+
+.kau-depth-shell {
+  position: relative;
+  border: 1px solid rgba(148,163,184,.105);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(45,212,191,.070), transparent 36%),
+    radial-gradient(circle at 92% 10%, rgba(99,102,241,.060), transparent 35%),
+    linear-gradient(180deg, rgba(10,15,27,.88), rgba(4,6,12,.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -1px 0 rgba(255,255,255,.03),
+    0 28px 110px rgba(0,0,0,.45),
+    0 0 0 1px rgba(0,0,0,.30);
+}
+
+.kau-depth-shell::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    linear-gradient(118deg, rgba(255,255,255,.07), transparent 18%, transparent 75%, rgba(255,255,255,.025)),
+    radial-gradient(circle at 50% 0%, rgba(255,255,255,.06), transparent 32%);
+  opacity: .58;
+}
+
+.kau-panel-pro {
+  position: relative;
+  border: 1px solid rgba(148,163,184,.10);
+  background:
+    radial-gradient(circle at 16% 0%, rgba(103,232,249,.052), transparent 34%),
+    linear-gradient(145deg, rgba(10,16,28,.94), rgba(4,7,13,.94));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.075),
+    0 22px 80px rgba(0,0,0,.36);
+}
+
+.kau-panel-pro::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.035), transparent);
+  opacity: .42;
+  transform: translateX(-110%);
+  animation: kauCinematicSweep 14s ease-in-out infinite;
+}
+
+.kau-panel-pro > * { position: relative; z-index: 1; }
+
+.kau-live-chip {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 0 28px rgba(52,211,153,.14);
+}
+
+.kau-number-hero {
+  font-family: Geist, "Satoshi", "General Sans", "Inter Tight", Inter, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.075em;
+  text-shadow: 0 18px 55px rgba(0,0,0,.55);
+}
+
+.kau-table-terminal {
+  background:
+    linear-gradient(180deg, rgba(10,15,27,.82), rgba(4,6,12,.86));
+  border-color: rgba(148,163,184,.09);
+}
+
+.kau-hover-lift {
+  transition: transform 180ms ease-out, border-color 180ms ease-out, background 180ms ease-out, box-shadow 180ms ease-out;
+}
+.kau-hover-lift:hover {
+  transform: translateY(-2px);
+  border-color: rgba(203,213,225,.18);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 26px 90px rgba(0,0,0,.42);
+}
+
+.kau-operational-pulse {
+  animation: kauBreath 4.8s ease-in-out infinite;
+}
+
+@keyframes kauBreath {
+  0%, 100% { opacity: .82; filter: saturate(1); }
+  50% { opacity: 1; filter: saturate(1.13); }
+}
+
+@keyframes kauCinematicSweep {
+  0%, 76% { transform: translateX(-110%); opacity: 0; }
+  84% { opacity: .55; }
+  100% { transform: translateX(110%); opacity: 0; }
+}
+
+/* KAU v4.2.69 Enterprise cinematic motion layer */
+.kau-enterprise-os {
+  isolation: isolate;
+  font-feature-settings: "cv02", "cv03", "cv04", "tnum";
+}
+
+.kau-enterprise-os::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 52% -10%, rgba(255,255,255,.052), transparent 25%),
+    radial-gradient(circle at 70% 18%, rgba(45,212,191,.038), transparent 23%),
+    radial-gradient(circle at 18% 24%, rgba(56,189,248,.032), transparent 26%),
+    linear-gradient(180deg, rgba(0,0,0,.14), rgba(0,0,0,.34));
+  mix-blend-mode: screen;
+  opacity: .78;
+}
+
+.kau-enterprise-os::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(circle at center, transparent 0%, rgba(0,0,0,.28) 72%, rgba(0,0,0,.58) 100%);
+  opacity: .72;
+}
+
+.kau-enterprise-os > * { position: relative; z-index: 1; }
+
+.kau-motion-in {
+  animation: kauPanelEnter .52s cubic-bezier(.16, 1, .3, 1) both;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.kau-hero-wow {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.105),
+    inset 0 -1px 0 rgba(255,255,255,.035),
+    0 34px 130px rgba(0,0,0,.58),
+    0 0 64px rgba(45,212,191,.07);
+}
+
+.kau-hero-wow::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(112deg, transparent 18%, rgba(255,255,255,.07) 48%, transparent 74%);
+  opacity: .38;
+  transform: translateX(-120%);
+  animation: kauPremiumLightPass 11s cubic-bezier(.45,0,.2,1) infinite;
+}
+
+.kau-progress-live::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.09), transparent);
+  transform: translateX(-120%);
+  animation: kauProgressBreath 4.8s ease-in-out infinite;
+}
+
+.kau-status-breath {
+  animation: kauStatusBreath 3.4s ease-in-out infinite;
+}
+
+.kau-filter-control {
+  will-change: transform, background, border-color;
+}
+.kau-filter-control:hover {
+  transform: translateY(-1px) scale(1.012);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 16px 42px rgba(0,0,0,.22);
+}
+
+.kau-panel-pro,
+.kau-depth-shell {
+  will-change: transform, box-shadow, border-color, background;
+}
+
+.kau-panel-pro:hover,
+.kau-depth-shell:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.10),
+    inset 0 -1px 0 rgba(255,255,255,.035),
+    0 34px 120px rgba(0,0,0,.52),
+    0 0 44px rgba(103,232,249,.045);
+}
+
+.kau-panel-pro:hover::after {
+  opacity: .62;
+  animation-duration: 8.5s;
+}
+
+@keyframes kauPanelEnter {
+  0% { opacity: 0; transform: translate3d(0, 14px, 0) scale(.992); filter: blur(3px); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes kauPremiumLightPass {
+  0%, 74% { opacity: 0; transform: translateX(-120%); }
+  84% { opacity: .42; }
+  100% { opacity: 0; transform: translateX(120%); }
+}
+
+@keyframes kauProgressBreath {
+  0%, 100% { opacity: 0; transform: translateX(-120%); }
+  42% { opacity: .28; }
+  70% { opacity: 0; transform: translateX(120%); }
+}
+
+@keyframes kauStatusBreath {
+  0%, 100% { filter: saturate(1); box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 0 18px rgba(52,211,153,.10); }
+  50% { filter: saturate(1.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 0 28px rgba(52,211,153,.18); }
+}
+
+/* KAU v4.2.70 Enterprise Surgical Lapidation
+   Quiet enterprise polish for sales + cash movement modules. */
+.enterprise-finance-quiet {
+  --enterprise-line: rgba(148, 163, 184, .058);
+  --enterprise-soft-line: rgba(148, 163, 184, .035);
+  --enterprise-surface: rgba(7, 13, 23, .78);
+}
+
+.enterprise-finance-quiet::before {
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.026), transparent 26%, rgba(255,255,255,.010) 72%, transparent),
+    radial-gradient(circle at 46% 0%, rgba(255,255,255,.025), transparent 34%);
+  opacity: .72;
+}
+
+.enterprise-finance-quiet::after {
+  opacity: .45;
+  filter: blur(24px);
+}
+
+.enterprise-finance-quiet .cash-accordion-panel {
+  animation: enterpriseAccordionIn .18s cubic-bezier(.2, .82, .2, 1) both;
+  transform-origin: top;
+}
+
+@keyframes enterpriseAccordionIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.enterprise-finance-quiet .finance-movement-row {
+  animation-duration: .18s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enterprise-finance-quiet .cash-accordion-panel,
+  .enterprise-finance-quiet .finance-movement-row,
+  .luxury-surface::before {
+    animation: none !important;
+  }
+}
+
+/* quieter depth system for the sales finance area */
+.luxury-surface {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.058),
+    inset 0 -1px 0 rgba(255,255,255,.024),
+    0 18px 62px rgba(0,0,0,.28);
+}
+
+.luxury-surface::before {
+  opacity: .36;
+}
+
+.executive-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.062),
+    inset 0 -1px 0 rgba(255,255,255,.026),
+    0 16px 48px rgba(0,0,0,.23);
+}
+
+.executive-card:hover,
+.luxury-surface:hover {
+  border-color: rgba(148, 163, 184, .14);
+}
+
+/* KAU v4.2.71 Enterprise execution guardrails
+   Visual-only polish: quiet depth, responsive tables, lightweight motion. */
+:root {
+  --kau-ease-enterprise: cubic-bezier(.2, .8, .2, 1);
+  --kau-motion-fast: 160ms;
+  --kau-motion-standard: 220ms;
+  --kau-depth-base: rgba(2, 6, 14, .92);
+  --kau-depth-surface: rgba(7, 13, 23, .84);
+  --kau-depth-floating: rgba(10, 18, 31, .86);
+  --kau-line-subtle: rgba(148, 163, 184, .065);
+}
+
+body {
+  background: #03050a;
+}
+
+.kau-shell {
+  background:
+    radial-gradient(circle at 18% 4%, rgba(24,255,139,.055), transparent 28%),
+    radial-gradient(circle at 82% 8%, rgba(168,85,247,.055), transparent 25%),
+    linear-gradient(180deg, #05070d 0%, #03050a 52%, #020308 100%);
+}
+
+.kau-shell::before {
+  opacity: .18;
+  background-size: 120px 120px;
+}
+
+.kau-shell::after {
+  opacity: .42;
+  background:
+    radial-gradient(circle at 50% -12%, rgba(255,255,255,.035), transparent 32%),
+    radial-gradient(circle at 84% 38%, rgba(168,85,247,.032), transparent 30%),
+    radial-gradient(circle at 8% 76%, rgba(20,184,166,.030), transparent 31%),
+    linear-gradient(180deg, transparent 0%, rgba(0,0,0,.22) 100%);
+}
+
+.luxury-surface,
+.kau-surgical-surface {
+  border-color: var(--kau-line-subtle) !important;
+  background:
+    linear-gradient(180deg, rgba(10,16,27,.86), rgba(5,8,15,.82)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.042),
+    inset 0 -1px 0 rgba(255,255,255,.018),
+    0 14px 44px rgba(0,0,0,.22) !important;
+  transition: transform var(--kau-motion-standard) var(--kau-ease-enterprise), border-color var(--kau-motion-standard) var(--kau-ease-enterprise), background var(--kau-motion-standard) var(--kau-ease-enterprise), box-shadow var(--kau-motion-standard) var(--kau-ease-enterprise);
+}
+
+.luxury-surface::before,
+.kau-surgical-surface::before {
+  opacity: .16 !important;
+  animation-duration: 16s !important;
+}
+
+.kau-surgical-surface:hover {
+  border-color: rgba(148, 163, 184, .11) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.05),
+    inset 0 -1px 0 rgba(255,255,255,.02),
+    0 18px 52px rgba(0,0,0,.26) !important;
+}
+
+.executive-card,
+.kau-surgical-card {
+  background:
+    linear-gradient(180deg, rgba(13,20,33,.88), rgba(7,11,20,.84)) !important;
+  border-color: rgba(148,163,184,.075) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.044),
+    0 12px 34px rgba(0,0,0,.20) !important;
+  transition: transform var(--kau-motion-standard) var(--kau-ease-enterprise), border-color var(--kau-motion-standard) var(--kau-ease-enterprise), background var(--kau-motion-standard) var(--kau-ease-enterprise), box-shadow var(--kau-motion-standard) var(--kau-ease-enterprise) !important;
+}
+
+.executive-card:hover,
+.kau-surgical-card:hover {
+  transform: translateY(-1px) !important;
+  border-color: rgba(148,163,184,.13) !important;
+  background:
+    linear-gradient(180deg, rgba(15,24,39,.91), rgba(8,13,23,.86)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.052),
+    0 16px 42px rgba(0,0,0,.24) !important;
+}
+
+.finance-shell::before,
+.enterprise-finance-quiet::before {
+  opacity: .38 !important;
+}
+
+.finance-shell::after,
+.enterprise-finance-quiet::after {
+  opacity: .20 !important;
+  filter: blur(18px) !important;
+}
+
+.cash-history-header,
+.cash-history-row {
+  grid-template-columns: .62fr 1.35fr .74fr .94fr .76fr .72fr .76fr .72fr;
+}
+
+.sales-movement-header,
+.sales-movement-row {
+  grid-template-columns: minmax(210px, 1.65fr) 124px minmax(104px,.75fr) 92px 104px 104px 96px 92px;
+}
+
+.finance-movement-row,
+.sales-movement-row {
+  will-change: background, transform;
+}
+
+.finance-movement-row:hover,
+.sales-movement-row:hover {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,.024) !important;
+}
+
+.enterprise-finance-quiet .cash-accordion-panel {
+  animation: enterpriseAccordionIn .16s var(--kau-ease-enterprise) both;
+}
+
+.premium-scrollbar::-webkit-scrollbar { width: 7px; height: 7px; }
+.premium-scrollbar::-webkit-scrollbar-track { background: rgba(148,163,184,.028); }
+.premium-scrollbar::-webkit-scrollbar-thumb { background: rgba(148,163,184,.17); border: 2px solid rgba(3,5,10,.72); }
+.premium-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.26); }
+.premium-scrollbar { scrollbar-color: rgba(148,163,184,.18) rgba(148,163,184,.028); }
+
+
+.kau-billion-sales .sales-movement-row > :nth-child(4),
+.kau-billion-sales .sales-movement-row > :nth-child(5),
+.kau-billion-sales .sales-movement-row > :nth-child(6),
+.kau-billion-sales .sales-movement-row > :nth-child(7) {
+  justify-self: center;
+}
+
+.kau-billion-sales .sales-movement-header > :nth-child(4),
+.kau-billion-sales .sales-movement-header > :nth-child(5),
+.kau-billion-sales .sales-movement-header > :nth-child(6),
+.kau-billion-sales .sales-movement-header > :nth-child(7) {
+  justify-self: center;
+}
+
+@media (max-width: 1180px) {
+  .sales-movement-header { display: none !important; }
+  .sales-movement-row {
+    grid-template-columns: minmax(0, 1.25fr) minmax(76px, .7fr) minmax(92px, .85fr) minmax(78px, .65fr) minmax(86px, .75fr);
+    gap: 12px;
+  }
+  .sales-movement-row > :nth-child(5),
+  .sales-movement-row > :nth-child(6),
+  .sales-movement-row > :nth-child(7),
+  .sales-movement-row > :nth-child(8) {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 860px) {
+  .cash-history-header { display: none !important; }
+  .cash-history-row {
+    grid-template-columns: 1fr auto;
+    gap: 10px 14px;
+    padding: 14px 16px !important;
+  }
+  .cash-history-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 1; }
+  .cash-history-row > :nth-child(1),
+  .cash-history-row > :nth-child(3),
+  .cash-history-row > :nth-child(4),
+  .cash-history-row > :nth-child(6),
+  .cash-history-row > :nth-child(8) { font-size: 11px; }
+  .cash-history-row > :nth-child(5),
+  .cash-history-row > :nth-child(7) { text-align: right; }
+  .sales-movement-row {
+    grid-template-columns: 1fr 1fr;
+    padding: 14px 16px !important;
+  }
+  .sales-movement-row > :nth-child(1),
+  .sales-movement-row > :nth-child(8) { grid-column: 1 / -1; }
+  .sales-movement-row > :nth-child(8) { justify-content: flex-start; }
+}
+
+@media (max-width: 640px) {
+  .luxury-surface,
+  .kau-surgical-surface { border-radius: 22px !important; }
+  .cash-history-row,
+  .sales-movement-row { grid-template-columns: 1fr; }
+  .cash-history-row > *,
+  .sales-movement-row > * { grid-column: 1 / -1 !important; text-align: left !important; }
+  .cash-history-row > :nth-child(5),
+  .cash-history-row > :nth-child(7) { text-align: left !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* KAU v4.2.72 Billion-level invisible sophistication
+   Visual-only lapidation for Sales + Cash History. No logic, data, filters, Supabase, actions, or layout structure changed. */
+.kau-billion-sales {
+  --kau-silent-bg: #020409;
+  --kau-silent-surface: rgba(7, 12, 21, .88);
+  --kau-silent-surface-2: rgba(10, 16, 27, .86);
+  --kau-silent-line: rgba(148, 163, 184, .055);
+  --kau-silent-line-strong: rgba(148, 163, 184, .085);
+  --kau-silent-text: rgba(248, 250, 252, .94);
+  --kau-silent-muted: rgba(148, 163, 184, .68);
+  --kau-silent-faint: rgba(148, 163, 184, .46);
+  --kau-ease-billion: cubic-bezier(.18, .78, .22, 1);
+  --kau-speed: 180ms;
+  font-family: Geist, Inter, "SF Pro Display", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "tnum";
+  color: var(--kau-silent-text);
+}
+
+.kau-billion-sales .luxury-surface,
+.kau-billion-sales .kau-surgical-surface,
+.kau-billion-sales .finance-shell,
+.kau-billion-sales .enterprise-finance-quiet {
+  border-color: var(--kau-silent-line) !important;
+  background:
+    linear-gradient(180deg, rgba(10, 15, 25, .90), rgba(5, 8, 15, .88)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.034),
+    inset 0 -1px 0 rgba(255,255,255,.012),
+    0 10px 30px rgba(0,0,0,.20) !important;
+  backdrop-filter: none !important;
+}
+
+.kau-billion-sales .luxury-surface::before,
+.kau-billion-sales .kau-surgical-surface::before,
+.kau-billion-sales .finance-shell::before,
+.kau-billion-sales .enterprise-finance-quiet::before,
+.kau-billion-sales .finance-shell::after,
+.kau-billion-sales .enterprise-finance-quiet::after {
+  opacity: .10 !important;
+  animation: none !important;
+}
+
+.kau-billion-sales .luxury-surface > div[class*="radial-gradient"],
+.kau-billion-sales .finance-shell > div[class*="radial-gradient"] {
+  opacity: .16 !important;
+}
+
+.kau-billion-sales h1,
+.kau-billion-sales h2,
+.kau-billion-sales h3,
+.kau-billion-sales p,
+.kau-billion-sales span,
+.kau-billion-sales button,
+.kau-billion-sales input,
+.kau-billion-sales select {
+  text-rendering: geometricPrecision;
+}
+
+.kau-billion-sales h1 {
+  color: rgba(248,250,252,.96) !important;
+  letter-spacing: -.062em !important;
+  font-weight: 620 !important;
+}
+
+.kau-billion-sales h2 {
+  color: rgba(248,250,252,.94) !important;
+  letter-spacing: -.038em !important;
+  font-weight: 620 !important;
+}
+
+.kau-billion-sales label,
+.kau-billion-sales .cash-history-header,
+.kau-billion-sales .sales-movement-header {
+  color: rgba(148,163,184,.55) !important;
+  font-weight: 520 !important;
+  letter-spacing: .11em !important;
+}
+
+.kau-billion-sales .executive-card,
+.kau-billion-sales .kau-surgical-card {
+  min-height: 174px !important;
+  border-color: rgba(148,163,184,.065) !important;
+  background:
+    linear-gradient(180deg, rgba(13,20,32,.90), rgba(7,11,19,.88)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.032),
+    0 9px 26px rgba(0,0,0,.18) !important;
+  transition:
+    transform var(--kau-speed) var(--kau-ease-billion),
+    border-color var(--kau-speed) var(--kau-ease-billion),
+    background var(--kau-speed) var(--kau-ease-billion),
+    box-shadow var(--kau-speed) var(--kau-ease-billion) !important;
+}
+
+.kau-billion-sales .executive-card::before,
+.kau-billion-sales .executive-card::after {
+  opacity: 0 !important;
+  animation: none !important;
+}
+
+.kau-billion-sales .executive-card:hover,
+.kau-billion-sales .kau-surgical-card:hover {
+  transform: translateY(-1px) !important;
+  border-color: rgba(148,163,184,.105) !important;
+  background:
+    linear-gradient(180deg, rgba(15,23,37,.92), rgba(8,13,22,.89)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.04),
+    0 12px 32px rgba(0,0,0,.22) !important;
+}
+
+.kau-billion-sales .executive-card p[class*="tabular-nums"],
+.kau-billion-sales .sales-movement-row p[class*="tabular-nums"],
+.kau-billion-sales .cash-history-row p[class*="tabular-nums"] {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.028em !important;
+}
+
+.kau-billion-sales .cash-history-header,
+.kau-billion-sales .sales-movement-header {
+  background: rgba(255,255,255,.010) !important;
+  border-bottom-color: var(--kau-silent-line) !important;
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
+}
+
+.kau-billion-sales .cash-history-row,
+.kau-billion-sales .sales-movement-row {
+  border-color: rgba(148,163,184,.038) !important;
+  background: transparent !important;
+  transition:
+    transform var(--kau-speed) var(--kau-ease-billion),
+    background var(--kau-speed) var(--kau-ease-billion),
+    border-color var(--kau-speed) var(--kau-ease-billion) !important;
+}
+
+.kau-billion-sales .cash-history-row:hover,
+.kau-billion-sales .sales-movement-row:hover {
+  transform: translateY(-1px) !important;
+  background: rgba(255,255,255,.018) !important;
+  border-color: rgba(148,163,184,.065) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+
+.kau-billion-sales .sales-movement-row {
+  padding-top: 15px !important;
+  padding-bottom: 15px !important;
+}
+
+.kau-billion-sales .cash-history-row {
+  padding-top: 14px !important;
+  padding-bottom: 14px !important;
+}
+
+.kau-billion-sales .cash-accordion-panel {
+  animation: kauAccordionSilent .15s var(--kau-ease-billion) both !important;
+  transform-origin: top center;
+}
+
+@keyframes kauAccordionSilent {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.kau-billion-sales button {
+  transition:
+    transform var(--kau-speed) var(--kau-ease-billion),
+    color var(--kau-speed) var(--kau-ease-billion),
+    background var(--kau-speed) var(--kau-ease-billion),
+    border-color var(--kau-speed) var(--kau-ease-billion),
+    box-shadow var(--kau-speed) var(--kau-ease-billion) !important;
+}
+
+.kau-billion-sales button:hover {
+  box-shadow: none !important;
+}
+
+.kau-billion-sales .sales-movement-row button,
+.kau-billion-sales .cash-history-row button {
+  border-color: rgba(148,163,184,.08) !important;
+  background: rgba(255,255,255,.028) !important;
+  box-shadow: none !important;
+}
+
+.kau-billion-sales .sales-movement-row button:hover,
+.kau-billion-sales .cash-history-row button:hover {
+  transform: translateY(-1px) !important;
+  border-color: rgba(148,163,184,.16) !important;
+  background: rgba(255,255,255,.05) !important;
+}
+
+.kau-billion-sales input,
+.kau-billion-sales select {
+  border-color: rgba(148,163,184,.075) !important;
+  background-color: rgba(255,255,255,.030) !important;
+  box-shadow: none !important;
+}
+
+.kau-billion-sales input:hover,
+.kau-billion-sales select:hover,
+.kau-billion-sales input:focus,
+.kau-billion-sales select:focus {
+  border-color: rgba(148,163,184,.16) !important;
+  background-color: rgba(255,255,255,.045) !important;
+  outline: none !important;
+}
+
+.kau-billion-sales .premium-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.kau-billion-sales .premium-scrollbar::-webkit-scrollbar-track { background: rgba(148,163,184,.018); }
+.kau-billion-sales .premium-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148,163,184,.14);
+  border: 1px solid rgba(3,5,10,.75);
+}
+.kau-billion-sales .premium-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.24); }
+
+.kau-billion-sales .sales-movement-header,
+.kau-billion-sales .sales-movement-row {
+  grid-template-columns: minmax(210px,1.62fr) 124px minmax(104px,.75fr) 92px 104px 104px 96px 92px !important;
+}
+
+.kau-billion-sales .cash-history-header,
+.kau-billion-sales .cash-history-row {
+  grid-template-columns: .58fr 1.36fr .68fr .90fr .72fr .68fr .72fr .68fr !important;
+}
+
+.kau-billion-sales .text-white,
+.kau-billion-sales .text-slate-50 {
+  color: rgba(248,250,252,.94) !important;
+}
+
+.kau-billion-sales .text-white\/58,
+.kau-billion-sales .text-white\/62,
+.kau-billion-sales .text-white\/68,
+.kau-billion-sales .text-slate-400\/70,
+.kau-billion-sales .text-slate-400\/72,
+.kau-billion-sales .text-slate-400\/78 {
+  color: rgba(148,163,184,.66) !important;
+}
+
+.kau-billion-sales .bg-money,
+.kau-billion-sales .bg-amber {
+  filter: saturate(.92) brightness(.98);
+}
+
+@media (max-width: 1180px) {
+  .kau-billion-sales .sales-movement-header { display: none !important; }
+  .kau-billion-sales .sales-movement-row {
+    grid-template-columns: minmax(0,1.2fr) minmax(82px,.7fr) minmax(96px,.8fr) minmax(88px,.7fr) minmax(92px,.75fr) !important;
+  }
+}
+
+@media (max-width: 860px) {
+  .kau-billion-sales .cash-history-header { display: none !important; }
+  .kau-billion-sales .cash-history-row { grid-template-columns: 1fr auto !important; }
+  .kau-billion-sales .cash-history-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 1; }
+  .kau-billion-sales .sales-movement-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .kau-billion-sales .luxury-surface,
+  .kau-billion-sales .kau-surgical-surface { border-radius: 22px !important; }
+  .kau-billion-sales .cash-history-row,
+  .kau-billion-sales .sales-movement-row { grid-template-columns: 1fr !important; }
+  .kau-billion-sales .cash-history-row > *,
+  .kau-billion-sales .sales-movement-row > * { grid-column: 1 / -1 !important; text-align: left !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kau-billion-sales *,
+  .kau-billion-sales *::before,
+  .kau-billion-sales *::after {
+    animation: none !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+/* KAU v4.2.73 - Cash history visual material alignment
+   Surgical adjustment: make Histórico de movimentação use the same premium material language as Movimento do dia and Caixa previsto. */
+.kau-billion-sales .kau-history-visual-match {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(20, 184, 166, .085), transparent 32%),
+    radial-gradient(circle at 92% 8%, rgba(168, 85, 247, .095), transparent 34%),
+    linear-gradient(180deg, rgba(12, 18, 31, .86), rgba(5, 8, 15, .84)) !important;
+  border-color: rgba(148, 163, 184, .105) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.062),
+    inset 0 -1px 0 rgba(255,255,255,.022),
+    0 24px 86px rgba(0,0,0,.31) !important;
+}
+
+.kau-billion-sales .kau-history-visual-match::before {
+  opacity: .58 !important;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.032), transparent 26%, rgba(255,255,255,.012) 72%, transparent),
+    radial-gradient(circle at 46% 0%, rgba(255,255,255,.035), transparent 34%) !important;
+}
+
+.kau-billion-sales .kau-history-visual-match::after {
+  opacity: .55 !important;
+  background: radial-gradient(ellipse at center, rgba(15,23,42,.46), transparent 68%) !important;
+  filter: blur(22px) !important;
+}
+
+.kau-billion-sales .kau-history-visual-match > div[class*="radial-gradient"] {
+  opacity: .42 !important;
+}
+
+.kau-billion-sales .kau-history-inner-surface {
+  background:
+    radial-gradient(circle at 6% 0%, rgba(34, 211, 238, .045), transparent 28%),
+    linear-gradient(180deg, rgba(7, 17, 27, .80), rgba(4, 9, 16, .78)) !important;
+  border-color: rgba(148,163,184,.085) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.040),
+    0 14px 46px rgba(0,0,0,.24) !important;
+}
+
+/* KAU Sales Command v4.2.80 - cinematic operational direction */
+:root {
+  --kau-command-bg: #030507;
+  --kau-command-surface: rgba(8, 13, 19, 0.78);
+  --kau-command-surface-strong: rgba(11, 18, 26, 0.88);
+  --kau-command-line: rgba(148, 163, 184, 0.075);
+  --kau-command-line-strong: rgba(148, 163, 184, 0.13);
+  --kau-command-text: #f8fafc;
+  --kau-command-muted: rgba(203, 213, 225, 0.58);
+  --kau-command-dim: rgba(148, 163, 184, 0.44);
+  --kau-command-cyan: #38bdf8;
+  --kau-command-green: #22c55e;
+  --kau-command-amber: #f59e0b;
+  --kau-command-rose: #fb7185;
+}
+
+.kau-command-root {
+  position: relative;
+  isolation: isolate;
+}
+
+.kau-command-root::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 16% 8%, rgba(20, 184, 166, 0.095), transparent 32%),
+    radial-gradient(circle at 86% 4%, rgba(56, 189, 248, 0.075), transparent 28%),
+    linear-gradient(180deg, #020407 0%, #04070c 54%, #020306 100%);
+  opacity: 0.96;
+}
+
+.kau-command-root::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.014) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at 50% 20%, black 0%, transparent 72%);
+  opacity: 0.22;
+}
+
+.kau-hero-command {
+  border: 1px solid var(--kau-command-line);
+  background:
+    linear-gradient(135deg, rgba(10, 16, 24, 0.91), rgba(3, 5, 8, 0.96) 56%, rgba(8, 12, 18, 0.92)),
+    radial-gradient(circle at 18% 0%, rgba(56, 189, 248, 0.11), transparent 42%);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.kau-hero-command::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(255,255,255,0.045), transparent 22%, transparent 78%, rgba(56,189,248,0.035));
+  opacity: 0.34;
+}
+
+.kau-command-controlbar,
+.kau-command-board,
+.kau-command-panel {
+  border: 1px solid var(--kau-command-line);
+  background: linear-gradient(180deg, rgba(10, 16, 24, 0.86), rgba(4, 7, 12, 0.94));
+  box-shadow: 0 22px 80px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.025);
+}
+
+.kau-command-board {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(34, 211, 238, 0.045), transparent 36%),
+    linear-gradient(180deg, rgba(7, 12, 19, 0.94), rgba(3, 5, 8, 0.98));
+}
+
+.kau-stage-column {
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  background: linear-gradient(180deg, rgba(9, 15, 22, 0.86), rgba(3, 6, 10, 0.93));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.022);
+  transition: border-color 180ms ease-out, background 180ms ease-out, transform 180ms ease-out;
+}
+
+.kau-stage-column:hover {
+  border-color: rgba(148, 163, 184, 0.15);
+  background: linear-gradient(180deg, rgba(11, 18, 26, 0.9), rgba(4, 8, 13, 0.95));
+}
+
+.kau-stage-header {
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.018));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
+}
+
+.kau-lead-card {
+  border: 1px solid rgba(148, 163, 184, 0.085);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.56), rgba(5, 9, 14, 0.82));
+  box-shadow: 0 10px 28px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.025);
+  transition: transform 180ms ease-out, border-color 180ms ease-out, background 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.kau-lead-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.18);
+  background: linear-gradient(180deg, rgba(17, 26, 38, 0.68), rgba(6, 11, 17, 0.88));
+  box-shadow: 0 16px 36px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.035);
+}
+
+.kau-lead-card-selected {
+  border-color: rgba(56, 189, 248, 0.26);
+  background: linear-gradient(180deg, rgba(8, 47, 73, 0.36), rgba(6, 12, 18, 0.88));
+}
+
+.kau-soft-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.kau-soft-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.025); border-radius: 999px; }
+.kau-soft-scrollbar::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.18); border-radius: 999px; }
+.kau-soft-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.28); }
+
+.kau-motion-breathing {
+  animation: kau-breathe 6s ease-in-out infinite;
+}
+
+@keyframes kau-breathe {
+  0%, 100% { opacity: 0.72; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.012); }
+}
+
+/* KAU Sales Command v4.2.81 - guided closing machine */
+.kau-neuro-command {
+  position: relative;
+  isolation: isolate;
+  font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+}
+
+.kau-neuro-command::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 17% 12%, rgba(34,197,94,.18), transparent 27%),
+    radial-gradient(circle at 72% 10%, rgba(56,189,248,.16), transparent 30%),
+    radial-gradient(circle at 88% 78%, rgba(245,158,11,.10), transparent 28%),
+    linear-gradient(145deg, #030407 0%, #061119 45%, #05070d 100%);
+  animation: kau-neuro-ambient 12s ease-in-out infinite;
+}
+
+.kau-neuro-command::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.016) 1px, transparent 1px);
+  background-size: 76px 76px;
+  mask-image: radial-gradient(circle at 52% 18%, black 0%, transparent 72%);
+  opacity: .22;
+}
+
+.kau-neuro-hero,
+.kau-neuro-panel,
+.kau-closing-engine {
+  border: 1px solid rgba(148,163,184,.095);
+  background:
+    linear-gradient(135deg, rgba(7, 15, 22, .92), rgba(4, 7, 12, .96) 54%, rgba(8, 13, 20, .90)),
+    radial-gradient(circle at 8% 0%, rgba(34,197,94,.10), transparent 34%),
+    radial-gradient(circle at 92% 0%, rgba(56,189,248,.09), transparent 32%);
+  box-shadow:
+    0 28px 90px rgba(0,0,0,.38),
+    inset 0 1px 0 rgba(255,255,255,.042);
+}
+
+.kau-neuro-hero::before,
+.kau-closing-engine::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.055), transparent 20%, transparent 76%, rgba(34,211,238,.05)),
+    radial-gradient(circle at 50% 0%, rgba(255,255,255,.045), transparent 38%);
+  opacity: .55;
+}
+
+.kau-hero-metric {
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.045);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.045), 0 16px 38px rgba(0,0,0,.25);
+  transition: transform 180ms ease-out, background 180ms ease-out, border-color 180ms ease-out;
+}
+.kau-hero-metric.emerald { background: linear-gradient(135deg, rgba(34,197,94,.14), rgba(255,255,255,.035)); }
+.kau-hero-metric.cyan { background: linear-gradient(135deg, rgba(56,189,248,.14), rgba(255,255,255,.035)); }
+.kau-hero-metric.amber { background: linear-gradient(135deg, rgba(245,158,11,.14), rgba(255,255,255,.035)); }
+.kau-hero-metric.rose { background: linear-gradient(135deg, rgba(251,113,133,.14), rgba(255,255,255,.035)); }
+.kau-hero-metric:hover { border-color: rgba(255,255,255,.16); background-color: rgba(255,255,255,.065); }
+
+.kau-command-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 999px;
+  padding: .48rem .78rem;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+.kau-live-dot {
+  width: .42rem;
+  height: .42rem;
+  border-radius: 999px;
+  background: #34d399;
+  box-shadow: 0 0 0 0 rgba(52,211,153,.45);
+  animation: kau-live-pulse 2.5s ease-out infinite;
+}
+
+.kau-mission-lead {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148,163,184,.09);
+  background: linear-gradient(180deg, rgba(15,23,42,.54), rgba(5,9,14,.86));
+  box-shadow: 0 12px 32px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.035);
+  transition: transform 190ms ease-out, border-color 190ms ease-out, background 190ms ease-out, box-shadow 190ms ease-out;
+}
+.kau-mission-lead::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background: radial-gradient(circle at 0% 0%, rgba(34,211,238,.09), transparent 42%);
+  opacity:0;
+  transition: opacity 190ms ease-out;
+}
+.kau-mission-lead:hover,
+.kau-mission-lead.active {
+  transform: translateY(-2px);
+  border-color: rgba(56,189,248,.25);
+  background: linear-gradient(180deg, rgba(11,40,52,.64), rgba(5,10,16,.9));
+  box-shadow: 0 20px 48px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.kau-mission-lead:hover::before,
+.kau-mission-lead.active::before { opacity:1; }
+.kau-mission-lead.pulse { animation: kau-card-reward .9s ease-out; }
+
+.kau-closing-engine {
+  position: relative;
+}
+
+.kau-action-core {
+  border: 1px solid rgba(255,255,255,.09);
+  background:
+    radial-gradient(circle at 30% 0%, rgba(34,197,94,.14), transparent 38%),
+    linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 22px 54px rgba(0,0,0,.28);
+}
+
+.kau-primary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .55rem;
+  background: linear-gradient(135deg, #34d399, #22d3ee 74%);
+  box-shadow: 0 18px 42px rgba(34,211,238,.20), inset 0 1px 0 rgba(255,255,255,.4);
+}
+.kau-primary-action:hover { transform: translateY(-1px); filter: saturate(1.06); }
+
+.kau-secondary-action {
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.045);
+  transition: transform 180ms ease-out, background 180ms ease-out;
+}
+.kau-secondary-action:hover { transform: translateY(-1px); background: rgba(255,255,255,.07); }
+
+.kau-journey-step {
+  border: 1px solid rgba(148,163,184,.09);
+  background: rgba(255,255,255,.035);
+  min-height: 128px;
+  transition: transform 180ms ease-out, background 180ms ease-out, border-color 180ms ease-out;
+}
+.kau-journey-step:hover { transform: translateY(-2px); border-color: rgba(56,189,248,.18); background: rgba(56,189,248,.055); }
+.kau-journey-step.active { border-color: rgba(245,158,11,.26); background: linear-gradient(180deg, rgba(245,158,11,.12), rgba(255,255,255,.035)); }
+.kau-journey-step.done { border-color: rgba(52,211,153,.18); background: linear-gradient(180deg, rgba(52,211,153,.09), rgba(255,255,255,.03)); }
+
+@keyframes kau-neuro-ambient {
+  0%,100% { filter: saturate(1) brightness(1); }
+  50% { filter: saturate(1.12) brightness(1.05); }
+}
+@keyframes kau-live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52,211,153,.42); }
+  70% { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+}
+@keyframes kau-card-reward {
+  0% { box-shadow: 0 0 0 rgba(34,211,238,0); }
+  38% { box-shadow: 0 0 0 1px rgba(34,211,238,.25), 0 18px 52px rgba(34,211,238,.18); }
+  100% { box-shadow: 0 12px 32px rgba(0,0,0,.22); }
+}
+
+/* KAU Sales Command v4.2.82 - guided live closing desk */
+.kau-guided-command {
+  position: relative;
+  isolation: isolate;
+  font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+}
+.kau-guided-command::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 15% 8%, rgba(34,197,94,.20), transparent 30%),
+    radial-gradient(circle at 68% 4%, rgba(14,165,233,.18), transparent 32%),
+    radial-gradient(circle at 90% 72%, rgba(245,158,11,.12), transparent 28%),
+    linear-gradient(145deg, #071018 0%, #0a141f 42%, #08090d 100%);
+  animation: kau-guided-breathe 14s ease-in-out infinite;
+}
+.kau-guided-command::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(circle at 50% 20%, rgba(255,255,255,.10) 0 1px, transparent 1px);
+  background-size: 54px 54px;
+  opacity: .10;
+  mask-image: radial-gradient(circle at 50% 20%, black 0%, transparent 70%);
+}
+.kau-guided-command.closing-mode::before {
+  background:
+    radial-gradient(circle at 15% 8%, rgba(34,197,94,.28), transparent 32%),
+    radial-gradient(circle at 72% 2%, rgba(56,189,248,.20), transparent 34%),
+    radial-gradient(circle at 82% 70%, rgba(245,158,11,.15), transparent 30%),
+    linear-gradient(145deg, #07130e 0%, #071723 45%, #090a0e 100%);
+}
+.kau-guided-topbar,
+.kau-guided-panel,
+.kau-closing-table {
+  border: 1px solid rgba(255,255,255,.095);
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.072), rgba(255,255,255,.035) 52%, rgba(255,255,255,.055)),
+    linear-gradient(180deg, rgba(10,23,34,.88), rgba(7,11,18,.92));
+  box-shadow: 0 26px 70px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
+}
+.kau-guided-topbar { position: relative; overflow: hidden; }
+.kau-guided-topbar::before,
+.kau-closing-table::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(34,197,94,.14), transparent 34%),
+    radial-gradient(circle at 88% 0%, rgba(56,189,248,.12), transparent 32%);
+  opacity: .8;
+}
+.kau-closing-table { position: relative; overflow: hidden; min-height: calc(100vh - 224px); }
+.kau-guided-panel { box-shadow: 0 20px 54px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.052); }
+.kau-command-metric {
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.045);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.045);
+  transition: transform 180ms ease-out, background 180ms ease-out, border-color 180ms ease-out;
+}
+.kau-command-metric:hover { transform: translateY(-1px); border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.07); }
+.kau-command-metric.tone-cyan { background: linear-gradient(135deg, rgba(34,211,238,.14), rgba(255,255,255,.04)); }
+.kau-command-metric.tone-green { background: linear-gradient(135deg, rgba(52,211,153,.15), rgba(255,255,255,.04)); }
+.kau-command-metric.tone-amber { background: linear-gradient(135deg, rgba(245,158,11,.15), rgba(255,255,255,.04)); }
+.kau-command-metric.tone-blue { background: linear-gradient(135deg, rgba(96,165,250,.14), rgba(255,255,255,.04)); }
+.kau-command-metric.tone-rose { background: linear-gradient(135deg, rgba(251,113,133,.13), rgba(255,255,255,.04)); }
+.kau-live-badge,
+.kau-soft-badge,
+.kau-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  border-radius: 999px;
+  padding: .5rem .78rem;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.055);
+  color: rgba(255,255,255,.68);
+}
+.kau-live-badge { color: #bbf7d0; background: rgba(34,197,94,.11); }
+.kau-live-badge span { width: .45rem; height: .45rem; border-radius: 999px; background: #34d399; box-shadow: 0 0 0 0 rgba(52,211,153,.42); animation: kau-guided-pulse 2.4s ease-out infinite; }
+.kau-mode-badge { color: #052e16; background: linear-gradient(135deg, #a7f3d0, #67e8f9); border-color: rgba(255,255,255,.22); }
+.kau-lead-line {
+  border: 1px solid rgba(255,255,255,.075);
+  background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.035));
+  transition: transform 180ms ease-out, background 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+.kau-lead-line:hover,
+.kau-lead-line.active {
+  transform: translateY(-1px);
+  border-color: rgba(34,211,238,.25);
+  background: linear-gradient(180deg, rgba(14,165,233,.13), rgba(255,255,255,.04));
+  box-shadow: 0 16px 36px rgba(0,0,0,.26);
+}
+.kau-progress-rail {
+  border: 1px solid rgba(255,255,255,.07);
+  background: rgba(255,255,255,.04);
+}
+.kau-stage-node {
+  min-height: 76px;
+  border-radius: 1rem;
+  padding: .75rem;
+  border: 1px solid rgba(255,255,255,.065);
+  background: rgba(255,255,255,.035);
+  transition: transform 180ms ease-out, border-color 180ms ease-out, background 180ms ease-out;
+}
+.kau-stage-node span {
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  color: rgba(255,255,255,.55);
+  font-size: 11px;
+  font-weight: 900;
+}
+.kau-stage-node p { margin-top: .55rem; font-size: 11px; line-height: 1.15; font-weight: 900; letter-spacing: -.02em; color: rgba(255,255,255,.50); }
+.kau-stage-node.done { border-color: rgba(52,211,153,.16); background: rgba(52,211,153,.08); }
+.kau-stage-node.done span { background: rgba(52,211,153,.18); color: #bbf7d0; }
+.kau-stage-node.active { transform: translateY(-2px); border-color: rgba(34,211,238,.30); background: linear-gradient(180deg, rgba(34,211,238,.15), rgba(34,197,94,.08)); }
+.kau-stage-node.active span { background: linear-gradient(135deg, #67e8f9, #86efac); color: #06222b; }
+.kau-stage-node.active p { color: #fff; }
+.kau-script-stage {
+  border: 1px solid rgba(255,255,255,.09);
+  background:
+    radial-gradient(circle at 7% 0%, rgba(34,197,94,.13), transparent 38%),
+    linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.038));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.055), 0 20px 52px rgba(0,0,0,.24);
+}
+.kau-feedback-panel {
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.04);
+}
+.kau-response-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  border-radius: 1.1rem;
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.70);
+  padding: .75rem .85rem;
+  font-size: 13px;
+  font-weight: 800;
+  transition: transform 160ms ease-out, background 160ms ease-out, color 160ms ease-out;
+}
+.kau-response-button:hover { transform: translateX(2px); background: rgba(34,211,238,.12); color: #fff; }
+.kau-command-primary,
+.kau-command-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  border-radius: 999px;
+  padding: .82rem 1rem;
+  font-size: 13px;
+  font-weight: 900;
+  transition: transform 180ms ease-out, filter 180ms ease-out, background 180ms ease-out;
+}
+.kau-command-primary {
+  background: linear-gradient(135deg, #34d399, #22d3ee);
+  color: #041018;
+  box-shadow: 0 18px 42px rgba(34,211,238,.18), inset 0 1px 0 rgba(255,255,255,.35);
+}
+.kau-command-secondary {
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.72);
+}
+.kau-command-primary:hover,
+.kau-command-secondary:hover { transform: translateY(-1px); filter: saturate(1.04); }
+.kau-gauge-box {
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(255,255,255,.045);
+}
+.kau-gauge-box.tone-green { background: linear-gradient(135deg, rgba(52,211,153,.13), rgba(255,255,255,.04)); }
+.kau-gauge-box.tone-cyan { background: linear-gradient(135deg, rgba(34,211,238,.13), rgba(255,255,255,.04)); }
+.kau-gauge-box.tone-rose { background: linear-gradient(135deg, rgba(251,113,133,.13), rgba(255,255,255,.04)); }
+@keyframes kau-guided-breathe {
+  0%,100% { filter: saturate(1) brightness(1); }
+  50% { filter: saturate(1.10) brightness(1.04); }
+}
+@keyframes kau-guided-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52,211,153,.42); }
+  70% { box-shadow: 0 0 0 9px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+}
+@media (max-width: 1535px) {
+  .kau-closing-table { min-height: auto; }
+}
+
+
+/* KAU v4.2.84 - performance stabilization */
+.kau-guided-command::before {
+  animation: none !important;
+  background:
+    radial-gradient(circle at 18% 6%, rgba(34,197,94,.10), transparent 28%),
+    radial-gradient(circle at 72% 5%, rgba(14,165,233,.08), transparent 28%),
+    linear-gradient(145deg, #071018 0%, #08111a 46%, #07080c 100%) !important;
+}
+.kau-guided-command::after {
+  opacity: .035 !important;
+  background-size: 96px 96px !important;
+}
+.kau-live-badge span { animation: none !important; box-shadow: 0 0 0 4px rgba(52,211,153,.10) !important; }
+.kau-motion-lite {
+  animation: none !important;
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+.kau-closing-table {
+  min-height: auto !important;
+}
+.kau-guided-panel, .kau-closing-table, .kau-guided-topbar {
+  transform: translateZ(0);
+}
+.kau-lead-line, .kau-command-metric, .kau-response-button, .kau-command-primary, .kau-command-secondary {
+  will-change: auto !important;
+}
+@media (max-width: 1280px) {
+  .kau-guided-command .min-h-\[560px\] { min-height: 360px !important; }
+}
+
+
+/* v4.2.97 - Sales movement optical alignment polish */
+.kau-billion-sales .sales-movement-header,
+.kau-billion-sales .sales-movement-row {
+  grid-template-columns: minmax(260px,1.20fr) minmax(106px,.48fr) minmax(126px,.58fr) minmax(96px,.44fr) minmax(104px,.48fr) minmax(108px,.50fr) minmax(96px,.42fr) 92px !important;
+  column-gap: 10px !important;
+}
+
+.kau-billion-sales .sales-movement-header > :nth-child(2),
+.kau-billion-sales .sales-movement-row > :nth-child(2) {
+  justify-self: start !important;
+}
+
+.kau-billion-sales .sales-movement-header > :nth-child(8),
+.kau-billion-sales .sales-movement-row > :nth-child(8) {
+  justify-self: center !important;
+}
+
+.kau-billion-sales .sales-movement-row > :nth-child(4),
+.kau-billion-sales .sales-movement-row > :nth-child(5),
+.kau-billion-sales .sales-movement-row > :nth-child(6),
+.kau-billion-sales .sales-movement-row > :nth-child(7),
+.kau-billion-sales .sales-movement-header > :nth-child(4),
+.kau-billion-sales .sales-movement-header > :nth-child(5),
+.kau-billion-sales .sales-movement-header > :nth-child(6),
+.kau-billion-sales .sales-movement-header > :nth-child(7) {
+  justify-self: center !important;
+}
+
+.kau-billion-sales .sales-movement-row {
+  min-height: 72px !important;
+}
+
+.kau-billion-sales .sales-movement-row button {
+  flex: 0 0 auto !important;
+}
+
+.kau-billion-sales .sales-movement-row span[class*="rounded-full"][class*="uppercase"] {
+  white-space: nowrap !important;
+}
+
+@media (max-width: 1280px) {
+  .kau-billion-sales .sales-movement-header,
+  .kau-billion-sales .sales-movement-row {
+    grid-template-columns: minmax(220px,1.10fr) minmax(96px,.46fr) minmax(112px,.55fr) minmax(88px,.42fr) minmax(94px,.45fr) minmax(98px,.46fr) minmax(88px,.40fr) 86px !important;
+    column-gap: 8px !important;
+  }
+}
