@@ -21,6 +21,7 @@ import {
   X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth-context";
 import { useNotificationStore } from "@/store/notification-store";
 import { commissionPercentToRate, defaultSellers, normalizeCommissionPercent } from "@/data/sellers";
 import { getSalesPlatform, salesPlatforms, type SalesPlatformId } from "@/data/sales-platforms";
@@ -406,6 +407,7 @@ function shouldShowOrderStatusBadge(status?: OrderStatus | string) {
 }
 
 export function SalesDashboardScreen() {
+  const { profile, isAdmin, isSeller } = useAuth();
   const [sales, setSales] = useState<SaleRecord[]>([]);
   const [cashWithdrawals, setCashWithdrawals] = useState<CashWithdrawal[]>([]);
   const [sellers, setSellers] = useState<SellerProfile[]>(defaultSellers);
@@ -436,12 +438,25 @@ export function SalesDashboardScreen() {
   useEffect(() => {
     const loaded = loadSellers();
     setSellers(loaded);
-    const gabriel = loaded.find((seller) => seller.name === "Gabriel Moreira") ?? loaded[0];
-    if (gabriel) {
-      setSale((current) => ({ ...current, sellerName: gabriel.name, commissionPercent: String(gabriel.commissionPercent) }));
+    if (isAdmin) {
+      const gabriel = loaded.find((seller) => seller.name === "Gabriel Moreira") ?? loaded[0];
+      if (gabriel) {
+        setSale((current) => ({ ...current, sellerName: gabriel.name, commissionPercent: String(gabriel.commissionPercent) }));
+      }
     }
     refresh();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!profile || !isSeller) return;
+    setDashboardSeller(profile.sellerDisplayName);
+    setSale((current) => ({
+      ...current,
+      sellerName: profile.sellerDisplayName,
+      commissionPercent: String(profile.commissionPercent)
+    }));
+  }, [profile, isSeller]);
 
   useEffect(() => {
     if (!toast) return;
@@ -640,16 +655,19 @@ export function SalesDashboardScreen() {
   async function refresh() {
     setIsLoading(true);
     try {
-      const [salesResponse, withdrawalsResponse] = await Promise.all([
-        fetch(`/api/sales?t=${Date.now()}`, { cache: "no-store" }),
-        fetch(`/api/cash-withdrawals?t=${Date.now()}`, { cache: "no-store" })
-      ]);
+      const salesResponse = await fetch(`/api/sales?t=${Date.now()}`, { cache: "no-store", credentials: "include" });
       const payload = await salesResponse.json();
-      const withdrawalsPayload = await withdrawalsResponse.json().catch(() => ({}));
       if (!salesResponse.ok) throw new Error(payload?.error || "Erro ao carregar vendas.");
-      if (!withdrawalsResponse.ok) throw new Error(withdrawalsPayload?.error || "Erro ao carregar saques.");
       setSales((payload.sales ?? []) as SaleRecord[]);
-      setCashWithdrawals((withdrawalsPayload.withdrawals ?? []) as CashWithdrawal[]);
+
+      if (isAdmin) {
+        const withdrawalsResponse = await fetch(`/api/cash-withdrawals?t=${Date.now()}`, { cache: "no-store", credentials: "include" });
+        const withdrawalsPayload = await withdrawalsResponse.json().catch(() => ({}));
+        if (!withdrawalsResponse.ok) throw new Error(withdrawalsPayload?.error || "Erro ao carregar saques.");
+        setCashWithdrawals((withdrawalsPayload.withdrawals ?? []) as CashWithdrawal[]);
+      } else {
+        setCashWithdrawals([]);
+      }
       setError(null);
       setLastUpdatedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
     } catch (err) {
@@ -760,6 +778,7 @@ export function SalesDashboardScreen() {
         method: isEditing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
+        credentials: "include",
         body: JSON.stringify(payload)
       });
       const result = await response.json();
@@ -794,7 +813,7 @@ export function SalesDashboardScreen() {
     setError(null);
     setToast(null);
     try {
-      const response = await fetch(`/api/sales?id=${deleteCandidate.id}`, { method: "DELETE", cache: "no-store" });
+      const response = await fetch(`/api/sales?id=${deleteCandidate.id}`, { method: "DELETE", cache: "no-store", credentials: "include" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result?.error || "Não foi possível excluir a venda.");
       setSales((current) => current.filter((item) => item.id !== deleteCandidate.id));
@@ -813,6 +832,7 @@ export function SalesDashboardScreen() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
+        credentials: "include",
         body: JSON.stringify({ paymentStatus: "paid", deliveryStatus: "delivered", paymentDate: todayKey() })
       });
       const result = await response.json().catch(() => ({}));
@@ -853,6 +873,7 @@ export function SalesDashboardScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
+        credentials: "include",
         body: JSON.stringify({ amount, withdrawnAt: withdrawalForm.withdrawnAt || todayKey(), note: withdrawalForm.note, saleIds: selectedSaleIds })
       });
       const result = await response.json().catch(() => ({}));
@@ -894,7 +915,7 @@ export function SalesDashboardScreen() {
               <Field label="Período"><select className={inputClass} value={periodMode} onChange={(e) => setPeriodMode(e.target.value as PeriodMode)}><option value="today">Hoje</option><option value="3d">Últimos 3 dias</option><option value="7d">Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="custom">Personalizado</option></select></Field>
               {periodMode === "custom" ? <Field label="De"><input className={inputClass} type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value || todayKey())} /></Field> : <Field label="Até"><input className={inputClass} type="date" value={dashboardDate} onChange={(e) => setDashboardDate(e.target.value || todayKey())} /></Field>}
               {periodMode === "custom" ? <Field label="Até"><input className={inputClass} type="date" value={customEndDate} onChange={(e) => { const value = e.target.value || todayKey(); setCustomEndDate(value); setDashboardDate(value); }} /></Field> : null}
-              <Field label="Vendedor"><select className={inputClass} value={dashboardSeller} onChange={(e) => setDashboardSeller(e.target.value)}><option value="all">Todos</option>{sellersForFilter.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></Field>
+              {isAdmin ? <Field label="Vendedor"><select className={inputClass} value={dashboardSeller} onChange={(e) => setDashboardSeller(e.target.value)}><option value="all">Todos</option>{sellersForFilter.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></Field> : <Field label="Vendedor"><input className={inputClass} value={profile?.sellerDisplayName || ""} readOnly /></Field>}
               <Field label="Pagamento"><select className={inputClass} value={dashboardType} onChange={(e) => setDashboardType(e.target.value)}><option value="all">Todos</option><option value="PAD">PAD</option><option value="COD">COD</option><option value="ANTECIPADO">Antecipado</option></select></Field>
               <Field label="Plataforma"><select className={inputClass} value={dashboardPlatform} onChange={(e) => setDashboardPlatform(e.target.value)}><option value="all">Todas</option>{salesPlatforms.map((platform) => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select></Field>
             </div>
@@ -918,14 +939,14 @@ export function SalesDashboardScreen() {
 
       {error ? <div className="rounded-2xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm font-bold text-danger">{error}</div> : null}
 
-      <section className="grid gap-4 xl:grid-cols-4">
+      <section className={cn("grid gap-4", isAdmin ? "xl:grid-cols-4" : "xl:grid-cols-2")}>
         <CommandCard title="Hoje" value={brl(summary.revenue)} subtext={plural(summary.salesCount, "venda registrada", "vendas registradas")} helper={`Média ${brl(summary.averageTicket)}`} comparison={revenueComparison} tone="money" icon={<BarChart3 size={21} />} featured />
-        <CommandCard title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
-        <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} />
-        <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={<button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button>} />
+        <CommandCard title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
+        {isAdmin ? <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} /> : null}
+        {isAdmin ? <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={<button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button>} /> : null}
       </section>
 
-      <CashMovementHistory rows={cashMovementRows} />
+      {isAdmin ? <CashMovementHistory rows={cashMovementRows} /> : null}
 
       <section className="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]">
         <PremiumPanel glow="cyan" className="self-start">
@@ -966,7 +987,7 @@ export function SalesDashboardScreen() {
 
       {isSaleDrawerOpen ? (
         <SaleDrawer onClose={closeDrawer}>
-          <SaleFormPanel mode={drawerMode} sale={sale} sellers={sellers} saleTotal={financialPreviewTotal} rawSaleTotal={saleTotal} sellerCommissionPreview={sellerCommissionPreview} ownerCommissionPreview={ownerCommissionPreview} isSaving={isSaving} onSubmit={submitSale} onUpdate={updateSale} onSaleDateChange={updateSaleDate} onTypeChange={updateSaleType} onPlatformChange={selectPlatform} onSellerChange={selectSellerByName} />
+          <SaleFormPanel mode={drawerMode} sale={sale} sellers={sellers} lockSeller={isSeller} saleTotal={financialPreviewTotal} rawSaleTotal={saleTotal} sellerCommissionPreview={sellerCommissionPreview} ownerCommissionPreview={ownerCommissionPreview} isSaving={isSaving} onSubmit={submitSale} onUpdate={updateSale} onSaleDateChange={updateSaleDate} onTypeChange={updateSaleType} onPlatformChange={selectPlatform} onSellerChange={selectSellerByName} />
         </SaleDrawer>
       ) : null}
 
@@ -987,10 +1008,11 @@ export function SalesDashboardScreen() {
   );
 }
 
-function SaleFormPanel({ mode, sale, sellers, saleTotal, rawSaleTotal, sellerCommissionPreview, ownerCommissionPreview, isSaving, onSubmit, onUpdate, onSaleDateChange, onTypeChange, onPlatformChange, onSellerChange }: {
+function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, rawSaleTotal, sellerCommissionPreview, ownerCommissionPreview, isSaving, onSubmit, onUpdate, onSaleDateChange, onTypeChange, onPlatformChange, onSellerChange }: {
   mode: DrawerMode;
   sale: SaleForm;
   sellers: SellerProfile[];
+  lockSeller?: boolean;
   saleTotal: number;
   rawSaleTotal: number;
   sellerCommissionPreview: number;
@@ -1031,7 +1053,11 @@ function SaleFormPanel({ mode, sale, sellers, saleTotal, rawSaleTotal, sellerCom
         <Field label="Cliente"><input className={inputClass} value={sale.customerName} onChange={(e) => onUpdate("customerName", e.target.value)} placeholder="Nome do cliente" required /></Field>
         <Field label="Telefone"><input className={inputClass} value={sale.customerPhone || ""} onChange={(e) => onUpdate("customerPhone", e.target.value)} placeholder="WhatsApp" required /></Field>
         <Field label="Cidade"><input className={inputClass} value={sale.city} onChange={(e) => onUpdate("city", e.target.value)} placeholder="Cidade" required /></Field>
-        <Field label="Vendedor"><select className={inputClass} value={sale.sellerName} onChange={(e) => onSellerChange(e.target.value)}>{sellers.map((seller) => <option key={seller.login}>{seller.name}</option>)}</select></Field>
+        {lockSeller ? (
+          <Field label="Vendedor"><input className={inputClass} value={sale.sellerName} readOnly /></Field>
+        ) : (
+          <Field label="Vendedor"><select className={inputClass} value={sale.sellerName} onChange={(e) => onSellerChange(e.target.value)}>{sellers.map((seller) => <option key={seller.login}>{seller.name}</option>)}</select></Field>
+        )}
         <Field label="Valor da venda"><input className={inputClass} inputMode="decimal" value={sale.totalAmount} onChange={(e) => onUpdate("totalAmount", e.target.value)} placeholder="R$ 197,00" required /></Field>
         <Field label="Comissão %"><input className={inputClass} inputMode="decimal" value={sale.commissionPercent} onChange={(e) => onUpdate("commissionPercent", e.target.value)} /></Field>
         <Field label="Quantidade"><input className={inputClass} type="number" min={1} step="1" value={sale.quantity} onChange={(e) => onUpdate("quantity", e.target.value)} /></Field>

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { applySellerScopeToBody, forbiddenResponse, isAdmin, isSeller, requireAuth, sellerNameMatches } from "@/lib/auth";
 import { getSupabaseServerClient, hasSupabaseConfig } from "@/lib/supabase-server";
 import type { LeadInput, LeadPriority, LeadTemperature, LeadContactStatus } from "@/data/leads-types";
+import type { UserProfile } from "@/data/user-profile-types";
 import { mapLead } from "@/data/lead-mapping";
 import { normalizeLeadSeller } from "@/data/lead-sellers";
 
@@ -25,7 +27,12 @@ function cleanText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function normalizeLead(body: Partial<LeadInput>) {
+function resolveSellerName(profile: UserProfile, body: Partial<LeadInput>) {
+  if (isSeller(profile)) return profile.sellerDisplayName;
+  return normalizeLeadSeller(body.sellerName);
+}
+
+function normalizeLead(profile: UserProfile, body: Partial<LeadInput>) {
   const customerName = cleanText(body.customerName);
   const customerPhone = cleanText(body.customerPhone);
 
@@ -35,7 +42,7 @@ function normalizeLead(body: Partial<LeadInput>) {
   const temperature = asOneOf(body.temperature, TEMPERATURES, "hot") as LeadTemperature;
   const contactStatus = asOneOf(body.contactStatus, STATUSES, "new") as LeadContactStatus;
   const priority = asOneOf(body.priority, PRIORITIES, temperature === "hot" ? "high" : "normal") as LeadPriority;
-  const sellerName = normalizeLeadSeller(body.sellerName);
+  const sellerName = resolveSellerName(profile, body);
 
   return {
     lead: {
@@ -69,17 +76,28 @@ function defaultNextAction(status: LeadContactStatus) {
   return "Qualificar e conduzir para venda AlphaSin";
 }
 
+async function assertLeadAccess(id: string, profile: UserProfile) {
+  const supabase = getSupabaseServerClient();
+  const { data } = await supabase.from("leads").select("seller_name").eq("id", id).maybeSingle();
+  if (!data) return false;
+  if (isAdmin(profile)) return true;
+  return sellerNameMatches(profile, data.seller_name);
+}
+
 export async function GET() {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ configured: false, leads: [] });
   }
 
   const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase
-    .from("leads")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(200);
+  let query = supabase.from("leads").select("*").order("created_at", { ascending: false }).limit(200);
+  if (isSeller(auth.profile)) {
+    query = query.eq("seller_name", auth.profile.sellerDisplayName);
+  }
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json({ configured: true, error: error.message }, { status: 500 });
@@ -89,12 +107,15 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }
 
-  const body = await request.json().catch(() => null);
-  const normalized = normalizeLead(body ?? {});
+  const body = applySellerScopeToBody(auth.profile, (await request.json().catch(() => null)) ?? {}) as Partial<LeadInput>;
+  const normalized = normalizeLead(auth.profile, body);
 
   if ("error" in normalized) {
     return NextResponse.json({ error: normalized.error }, { status: 400 });
@@ -116,6 +137,9 @@ export async function POST(request: Request) {
 
 
 export async function PATCH(request: Request) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }
@@ -124,6 +148,10 @@ export async function PATCH(request: Request) {
   const id = url.searchParams.get("id");
   if (!id) {
     return NextResponse.json({ error: "Lead nao informado." }, { status: 400 });
+  }
+
+  if (!(await assertLeadAccess(id, auth.profile))) {
+    return forbiddenResponse("Você não pode editar este lead.");
   }
 
   const body = await request.json().catch(() => null) as Partial<LeadInput> | null;

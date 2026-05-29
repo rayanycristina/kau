@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { applySellerScopeToBody, forbiddenResponse, isAdmin, isSeller, requireAuth, sellerNameMatches } from "@/lib/auth";
 import { getSupabaseServerClient, hasSupabaseConfig } from "@/lib/supabase-server";
 import type { SaleInput } from "@/data/sales-types";
+import type { UserProfile } from "@/data/user-profile-types";
 
 export const dynamic = "force-dynamic";
 
@@ -218,17 +220,28 @@ export function mapSale(row: Record<string, any>) {
   };
 }
 
+async function assertSaleAccess(id: string, profile: UserProfile) {
+  const supabase = getSupabaseServerClient();
+  const { data } = await supabase.from("sales").select("seller_name").eq("id", id).maybeSingle();
+  if (!data) return false;
+  if (isAdmin(profile)) return true;
+  return sellerNameMatches(profile, data.seller_name);
+}
+
 export async function GET() {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ configured: false, sales: [] });
   }
 
   const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase
-    .from("sales")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(500);
+  let query = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+  if (isSeller(auth.profile)) {
+    query = query.eq("seller_name", auth.profile.sellerDisplayName);
+  }
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json({ configured: true, error: error.message }, { status: 500 });
@@ -238,12 +251,15 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }
 
   const body = await request.json().catch(() => null);
-  const normalized = normalizeSale(body ?? {});
+  const normalized = normalizeSale(applySellerScopeToBody(auth.profile, (body ?? {}) as Partial<SaleInput>));
 
   if ("error" in normalized) {
     return NextResponse.json({ error: normalized.error }, { status: 400 });
@@ -297,6 +313,9 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }
@@ -308,7 +327,11 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Informe o id da venda para atualizar." }, { status: 400 });
   }
 
-  const body = await request.json().catch(() => ({}));
+  if (!(await assertSaleAccess(id, auth.profile))) {
+    return forbiddenResponse("Você não pode editar esta venda.");
+  }
+
+  const body = applySellerScopeToBody(auth.profile, (await request.json().catch(() => ({}))) as Partial<SaleInput>);
   const updates: Record<string, unknown> = {};
 
   if (body.customerName !== undefined) updates.customer_name = cleanText(body.customerName);
@@ -401,6 +424,9 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }
@@ -410,6 +436,10 @@ export async function DELETE(request: Request) {
 
   if (!id) {
     return NextResponse.json({ error: "Informe o id da venda para excluir." }, { status: 400 });
+  }
+
+  if (!(await assertSaleAccess(id, auth.profile))) {
+    return forbiddenResponse("Você não pode excluir esta venda.");
   }
 
   const supabase = getSupabaseServerClient();

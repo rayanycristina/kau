@@ -483,7 +483,7 @@ function SalesArenaPage() {
 
   const loadArena = useCallback(async () => {
     try {
-      const response = await fetch(`/api/sales?t=${Date.now()}`, { cache: "no-store" });
+      const response = await fetch(`/api/sales?t=${Date.now()}`, { cache: "no-store", credentials: "include" });
       if (!response.ok) throw new Error("sync failed");
       const payload = await response.json().catch(() => ({}));
       const nextSales = (payload.sales ?? []) as SaleRecord[];

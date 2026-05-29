@@ -339,7 +339,7 @@ function fillScript(script: string, lead?: LeadRecord) {
 }
 
 async function persistLeadStatus(id: string, contactStatus: LeadContactStatus) {
-  await fetch(`/api/leads?id=${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contactStatus }) }).catch(() => null);
+  await fetch(`/api/leads?id=${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ contactStatus }) }).catch(() => null);
 }
 
 export function SalesCommandScreen() {
@@ -357,7 +357,7 @@ export function SalesCommandScreen() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/leads", { cache: "no-store" })
+    fetch("/api/leads", { cache: "no-store", credentials: "include" })
       .then((res) => res.json())
       .then((payload) => {
         if (!alive) return;

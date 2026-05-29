@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/auth";
 import { getSupabaseServerClient, hasSupabaseConfig } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,9 @@ function mapWithdrawal(row: Record<string, any>) {
 }
 
 export async function GET() {
+  const auth = await requireAdmin();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ configured: false, withdrawals: [] });
   }
@@ -58,6 +62,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireAdmin();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }

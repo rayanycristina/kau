@@ -7,6 +7,7 @@ import { TacticalButton } from "@/components/ui/tactical-button";
 import { TacticalPanel } from "@/components/ui/tactical-panel";
 import { cn } from "@/lib/utils";
 import type { LeadContactStatus, LeadInput, LeadPriority, LeadRecord, LeadTemperature } from "@/data/leads-types";
+import { useAuth } from "@/contexts/auth-context";
 import { defaultLeadSeller, leadSellerOptions, normalizeLeadSeller } from "@/data/lead-sellers";
 
 const inputClass = "w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm font-bold text-white outline-none transition placeholder:text-white/25 focus:border-cyan/40 focus:bg-cyan/[.045] focus:shadow-[0_0_0_3px_rgba(34,211,238,.08)]";
@@ -109,6 +110,7 @@ function toEditable(lead: LeadRecord): LeadInput {
 }
 
 export function LeadArchiveScreen({ leadId }: { leadId: string }) {
+  const { profile, isAdmin } = useAuth();
   const [lead, setLead] = useState<LeadRecord | null>(null);
   const [draft, setDraft] = useState<LeadInput | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -117,7 +119,7 @@ export function LeadArchiveScreen({ leadId }: { leadId: string }) {
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/leads/${leadId}`)
+    fetch(`/api/leads/${leadId}`, { credentials: "include" })
       .then((res) => res.json())
       .then((payload) => {
         if (!alive) return;
@@ -168,6 +170,7 @@ export function LeadArchiveScreen({ leadId }: { leadId: string }) {
       const response = await fetch(`/api/leads/${leadId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(draft)
       });
       const payload = await response.json();
@@ -239,7 +242,11 @@ export function LeadArchiveScreen({ leadId }: { leadId: string }) {
                   <Field label="Bairro"><input className={inputClass} value={draft.neighborhood || ""} onChange={(e) => updateDraft("neighborhood", e.target.value)} /></Field>
                   <div className="md:col-span-2"><Field label="Endereço"><input className={inputClass} value={draft.address || ""} onChange={(e) => updateDraft("address", e.target.value)} placeholder="Rua, número, referência" /></Field></div>
                   <Field label="Origem"><input className={inputClass} value={draft.source || ""} onChange={(e) => updateDraft("source", e.target.value)} placeholder="Instagram, indicação, anúncio..." /></Field>
-                  <Field label="Vendedor"><select className={inputClass} value={draft.sellerName || defaultLeadSeller} onChange={(e) => updateDraft("sellerName", normalizeLeadSeller(e.target.value))}>{leadSellerOptions.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></Field>
+                  {isAdmin ? (
+                    <Field label="Vendedor"><select className={inputClass} value={draft.sellerName || defaultLeadSeller} onChange={(e) => updateDraft("sellerName", normalizeLeadSeller(e.target.value))}>{leadSellerOptions.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></Field>
+                  ) : (
+                    <Field label="Vendedor"><input className={inputClass} value={profile?.sellerDisplayName || draft.sellerName || ""} readOnly /></Field>
+                  )}
                 </div>
               </section>
 

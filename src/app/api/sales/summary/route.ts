@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isSeller, requireAuth } from "@/lib/auth";
 import { getSupabaseServerClient, hasSupabaseConfig } from "@/lib/supabase-server";
 import { getSaleFinancialState, getOrderStatusFromSale } from "@/data/sale-financial-state";
 
@@ -78,17 +79,20 @@ function mapSale(row: Record<string, any>) {
 }
 
 export async function GET() {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) {
     return NextResponse.json({ configured: false });
   }
 
   const supabase = getSupabaseServerClient();
   const today = new Date().toISOString().slice(0, 10);
-  const { data, error } = await supabase
-    .from("sales")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(500);
+  let query = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+  if (isSeller(auth.profile)) {
+    query = query.eq("seller_name", auth.profile.sellerDisplayName);
+  }
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json({ configured: true, error: error.message }, { status: 500 });

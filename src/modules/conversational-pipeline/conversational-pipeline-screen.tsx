@@ -103,7 +103,7 @@ export function ConversationalPipelineScreen() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/leads")
+    fetch("/api/leads", { credentials: "include" })
       .then((res) => res.json())
       .then((payload) => {
         if (!alive) return;
@@ -135,6 +135,7 @@ export function ConversationalPipelineScreen() {
       const response = await fetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(quickLead)
       });
       const payload = await response.json().catch(() => ({}));
@@ -162,7 +163,7 @@ export function ConversationalPipelineScreen() {
     setMessage(null);
     setDeletingLeadId(lead.id);
     try {
-      const response = await fetch(`/api/leads/${lead.id}`, { method: "DELETE", cache: "no-store" });
+      const response = await fetch(`/api/leads/${lead.id}`, { method: "DELETE", cache: "no-store", credentials: "include" });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || "Não foi possível excluir o lead.");
       setLeads((current) => current.filter((item) => item.id !== lead.id));

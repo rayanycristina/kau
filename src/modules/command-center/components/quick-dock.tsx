@@ -13,8 +13,9 @@ import {
   Target,
   X
 } from "lucide-react";
-import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { TacticalButton } from "@/components/ui/tactical-button";
+import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
 import { useOperationStore } from "@/store/operation-store";
 import type { SaleInput, SaleRecord } from "@/data/sales-types";
@@ -167,6 +168,7 @@ function formatBRL(value: number) {
 }
 
 export function QuickDock() {
+  const { profile, isSeller } = useAuth();
   const [activeAction, setActiveAction] = useState<DockAction | null>(null);
   const [completedAction, setCompletedAction] = useState<string | null>(null);
   const [sale, setSale] = useState<SaleInput>(initialSale);
@@ -177,6 +179,16 @@ export function QuickDock() {
   const [isSavingLead, setIsSavingLead] = useState(false);
   const registerSale = useOperationStore((s) => s.registerSale);
   const activeConfig = useMemo(() => (activeAction && activeAction !== "sale" && activeAction !== "lead" ? actionConfig[activeAction] : null), [activeAction]);
+
+  useEffect(() => {
+    if (!profile || !isSeller) return;
+    setSale((current) => ({
+      ...current,
+      sellerName: profile.sellerDisplayName,
+      commissionRate: commissionPercentToRate(profile.commissionPercent)
+    }));
+    setLead((current) => ({ ...current, sellerName: profile.sellerDisplayName }));
+  }, [profile, isSeller]);
   const commissionPercent = commissionRateToPercent(Number(sale.commissionRate || 5));
   const commissionPreview = Number.isFinite(Number(sale.totalAmount)) ? Number(sale.totalAmount) * (commissionPercent / 100) : 0;
 
@@ -210,6 +222,7 @@ export function QuickDock() {
       const response = await fetch("/api/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(sale)
       });
       const payload = await response.json();
@@ -241,6 +254,7 @@ export function QuickDock() {
       const response = await fetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(lead)
       });
       const payload = await response.json();
@@ -348,13 +362,17 @@ export function QuickDock() {
                 </div>
                 <div>
                   <label className={labelClass}>Vendedor</label>
-                  <select className={inputClass} value={sale.sellerName} onChange={(e) => {
-                    const seller = defaultSellers.find((item) => item.name === e.target.value);
-                    updateSaleField("sellerName", e.target.value);
-                    if (seller) updateSaleField("commissionRate", commissionPercentToRate(seller.commissionPercent));
-                  }}>
-                    {defaultSellers.map((seller) => <option key={seller.login}>{seller.name}</option>)}
-                  </select>
+                  {isSeller ? (
+                    <input className={inputClass} value={sale.sellerName} readOnly />
+                  ) : (
+                    <select className={inputClass} value={sale.sellerName} onChange={(e) => {
+                      const seller = defaultSellers.find((item) => item.name === e.target.value);
+                      updateSaleField("sellerName", e.target.value);
+                      if (seller) updateSaleField("commissionRate", commissionPercentToRate(seller.commissionPercent));
+                    }}>
+                      {defaultSellers.map((seller) => <option key={seller.login}>{seller.name}</option>)}
+                    </select>
+                  )}
                 </div>
                 <div>
                   <label className={labelClass}>Quantidade</label>

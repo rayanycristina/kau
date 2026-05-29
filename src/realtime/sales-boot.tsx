@@ -12,7 +12,7 @@ export function SalesBoot() {
 
     async function loadSummary() {
       try {
-        const response = await fetch("/api/sales/summary", { cache: "no-store" });
+        const response = await fetch("/api/sales/summary", { cache: "no-store", credentials: "include" });
         if (!response.ok) return;
         const summary = (await response.json()) as SalesSummary;
         if (!ignore) hydrateSalesSummary(summary);

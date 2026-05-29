@@ -2,28 +2,41 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Bot, ChevronLeft, CircleDollarSign, Gauge, Home, MessagesSquare, PhoneCall, Settings, ShieldAlert, ShoppingCart, Swords, Target, TimerReset, Trophy, UsersRound } from "lucide-react";
+import { BarChart3, Bot, ChevronLeft, CircleDollarSign, Gauge, Home, LogOut, MessagesSquare, PhoneCall, Settings, ShieldAlert, ShoppingCart, Swords, Target, TimerReset, Trophy, UserCog, UsersRound } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth-context";
 
-const items = [
+const baseItems = [
   { label: "Command Center", href: "/", icon: Home, sub: "Nervo central" },
   { label: "Live Calls", href: "/live-calls", icon: PhoneCall, badge: "AO VIVO", sub: "3 chamadas" },
   { label: "Leads", href: "/pipeline", icon: Target, count: "342", sub: "17 quentes" },
   { label: "Vendas", href: "/sales", icon: ShoppingCart, sub: "registro + comissão" },
   { label: "Sales Command", href: "/sales-command", icon: MessagesSquare, badge: "NOVO", sub: "fechamento" },
-  { label: "Equipe / Vendedores", href: "/team", icon: UsersRound, sub: "comissões" },
+  { label: "Equipe / Vendedores", href: "/team", icon: UsersRound, sub: "comissões", adminOnly: true },
   { label: "Follow-up", href: "/follow-up", icon: TimerReset, count: "27", alert: true, sub: "R$ 4.250" },
   { label: "Money Alert", href: "/money-alert", icon: ShieldAlert, count: "9", alert: true, sub: "R$ 12.450" },
   { label: "COD/PAD", href: "/cod-pad", icon: CircleDollarSign, count: "15", sub: "risco logístico" },
   { label: "Sales Arena", href: "/sales-arena", icon: Trophy, sub: "ranking vivo" },
   { label: "Coach AI", href: "/coach-ai", icon: Bot, sub: "evolução" },
   { label: "Relatórios", href: "/ceo-briefing", icon: BarChart3, sub: "CEO briefing" },
+  { label: "Usuários", href: "/admin/users", icon: UserCog, sub: "gestão de acesso", adminOnly: true },
   { label: "Configurações", href: "/settings", icon: Settings, sub: "sistema" }
 ];
 
 export function Navigation() {
   const pathname = usePathname();
+  const { profile, isAdmin, signOut } = useAuth();
+  const items = baseItems.filter((item) => !item.adminOnly || isAdmin);
+  const initials = profile?.fullName
+    ? profile.fullName
+        .split(" ")
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase()
+    : "KA";
+
   return (
     <aside className="paint-contain relative z-20 flex h-screen w-[264px] shrink-0 flex-col border-r border-white/10 bg-black/38 p-4 backdrop-blur-2xl">
       <div className="mb-7 flex items-center justify-between">
@@ -65,12 +78,23 @@ export function Navigation() {
       <div className="mt-auto space-y-3">
         <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4 shadow-panel">
           <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-amber/40 to-purple/30 text-sm font-black">GM</div>
-            <div className="min-w-0"><p className="truncate text-sm font-bold">Gabriel Moreira</p><p className="text-xs text-white/50">Gestor Comercial</p></div>
+            <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-amber/40 to-purple/30 text-sm font-black">{initials}</div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold">{profile?.fullName || "Carregando..."}</p>
+              <p className="text-xs text-white/50">{profile?.role === "admin" ? "Administradora" : "Vendedora"}</p>
+            </div>
           </div>
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-purple/30 bg-purple/15 px-3 py-2 text-xs font-bold uppercase text-purple"><span>Nível Élite</span><Swords size={14} /></div>
-          <div className="mt-4 flex items-end justify-between text-xs"><span className="font-bold text-money">XP 24.850</span><span className="text-white/50">/ 35.000</span></div>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10"><motion.div initial={{ width: 0 }} animate={{ width: "71%" }} transition={{ duration: 1.2 }} className="h-full rounded-full bg-money shadow-glowGreen" /></div>
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-purple/30 bg-purple/15 px-3 py-2 text-xs font-bold uppercase text-purple">
+            <span>{profile?.sellerDisplayName || "KAU"}</span>
+            <Swords size={14} />
+          </div>
+          <button
+            type="button"
+            onClick={() => signOut()}
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-bold uppercase tracking-[.08em] text-white/62 transition hover:text-white"
+          >
+            <LogOut size={14} /> Sair
+          </button>
         </div>
         <div className="rounded-2xl border border-money/15 bg-money/10 p-4 shadow-glowGreen">
           <p className="text-xs font-black uppercase text-money">Operação em alta</p>

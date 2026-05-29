@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { forbiddenResponse, isAdmin, isSeller, requireAuth, sellerNameMatches } from "@/lib/auth";
 import { getSupabaseServerClient, hasSupabaseConfig } from "@/lib/supabase-server";
 import { mapLead } from "@/data/lead-mapping";
 import type { LeadInput } from "@/data/leads-types";
+import type { UserProfile } from "@/data/user-profile-types";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +18,15 @@ function toMoney(value: unknown) {
   return Math.round(number * 100) / 100;
 }
 
-function patchFromBody(body: Partial<LeadInput>) {
+async function assertLeadAccess(id: string, profile: UserProfile) {
+  const supabase = getSupabaseServerClient();
+  const { data } = await supabase.from("leads").select("seller_name").eq("id", id).maybeSingle();
+  if (!data) return false;
+  if (isAdmin(profile)) return true;
+  return sellerNameMatches(profile, data.seller_name);
+}
+
+function patchFromBody(profile: UserProfile, body: Partial<LeadInput>) {
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (body.customerName !== undefined) patch.customer_name = cleanText(body.customerName);
   if (body.customerPhone !== undefined) patch.customer_phone = cleanText(body.customerPhone);
@@ -27,7 +37,8 @@ function patchFromBody(body: Partial<LeadInput>) {
   if (body.temperature !== undefined) patch.temperature = body.temperature;
   if (body.contactStatus !== undefined) patch.contact_status = body.contactStatus;
   if (body.priority !== undefined) patch.priority = body.priority;
-  if (body.sellerName !== undefined) patch.seller_name = body.sellerName;
+  if (body.sellerName !== undefined && isAdmin(profile)) patch.seller_name = body.sellerName;
+  if (isSeller(profile)) patch.seller_name = profile.sellerDisplayName;
   if (body.nextAction !== undefined) patch.next_action = cleanText(body.nextAction);
   if (body.nextActionAt !== undefined) patch.next_action_at = cleanText(body.nextActionAt);
   if (body.lastContactAt !== undefined) patch.last_contact_at = cleanText(body.lastContactAt);
@@ -40,8 +51,16 @@ function patchFromBody(body: Partial<LeadInput>) {
 }
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) return NextResponse.json({ error: "Supabase nao configurado." }, { status: 503 });
   const { id } = await params;
+
+  if (!(await assertLeadAccess(id, auth.profile))) {
+    return forbiddenResponse("Você não pode acessar este lead.");
+  }
+
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase.from("leads").select("*").eq("id", id).single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -49,10 +68,18 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) return NextResponse.json({ error: "Supabase nao configurado." }, { status: 503 });
   const { id } = await params;
+
+  if (!(await assertLeadAccess(id, auth.profile))) {
+    return forbiddenResponse("Você não pode editar este lead.");
+  }
+
   const body = await request.json().catch(() => null);
-  const patch = patchFromBody(body ?? {});
+  const patch = patchFromBody(auth.profile, body ?? {});
 
   if (patch.customer_name === null) return NextResponse.json({ error: "Nome do lead nao pode ficar vazio." }, { status: 400 });
   if (patch.customer_phone === null) return NextResponse.json({ error: "Telefone do lead nao pode ficar vazio." }, { status: 400 });
@@ -64,8 +91,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAuth();
+  if ("error" in auth) return auth.error;
+
   if (!hasSupabaseConfig()) return NextResponse.json({ error: "Supabase nao configurado." }, { status: 503 });
   const { id } = await params;
+
+  if (!(await assertLeadAccess(id, auth.profile))) {
+    return forbiddenResponse("Você não pode excluir este lead.");
+  }
+
   const supabase = getSupabaseServerClient();
 
   // Importante: no Supabase com RLS, um delete sem policy pode retornar sem erro
