@@ -100,7 +100,7 @@ export async function GET() {
   }
 
   const rows = (data ?? []) as Record<string, any>[];
-  const todayRows = rows.filter((row) => saleState(row).countsRevenue && String(row.created_at || "").slice(0, 10) === today);
+  const todayRows = rows.filter((row) => saleState(row).countsRevenue);
   const scheduledTodayRows = rows.filter((row) => saleState(row).isValidSale && String(row.expected_payment_date || "") === today);
   const dailyRevenue = todayRows.reduce((sum, row) => sum + Number(row.total_amount || 0), 0);
   const totalCommission = todayRows.reduce((sum, row) => sum + ownerCommission(row), 0);
