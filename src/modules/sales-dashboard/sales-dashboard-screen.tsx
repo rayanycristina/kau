@@ -579,9 +579,9 @@ export function SalesDashboardScreen() {
         description: sale.customerName,
         order: saleOrderNumber(sale),
         movement: `Entrada no caixa · ${saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus)}`,
-        amount: ownerWalletValueForSale(sale),
-        fee: subCommissionForSale(sale),
-        net: ownerWalletValueForSale(sale),
+        amount: isAdmin ? ownerWalletValueForSale(sale) : subCommissionForSale(sale),
+        fee: isAdmin ? subCommissionForSale(sale) : 0,
+        net: isAdmin ? ownerWalletValueForSale(sale) : subCommissionForSale(sale),
         status: withdrawnSaleIds.has(sale.id) ? "Sacada" : "Disponível",
         sale
       });
@@ -591,7 +591,7 @@ export function SalesDashboardScreen() {
       const bTime = new Date(b.createdAt || b.withdrawnAt || "").getTime();
       return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
     });
-    withdrawalsInSequence.forEach((withdrawal, index) => {
+    if (isAdmin) withdrawalsInSequence.forEach((withdrawal, index) => {
       const linkedSales = (withdrawal.saleIds || []).map((id) => withdrawalSalesById.get(id)).filter(Boolean) as SaleRecord[];
       const withdrawalNumber = `Saque ${String(index + 1).padStart(3, "0")}`;
       rows.push({
@@ -615,7 +615,7 @@ export function SalesDashboardScreen() {
       if (a.kind !== b.kind) return a.kind === "withdrawal" ? -1 : 1;
       return a.id.localeCompare(b.id);
     });
-  }, [activeWithdrawals, confirmedCashRows, withdrawalSalesById, withdrawnSaleIds]);
+  }, [activeWithdrawals, confirmedCashRows, isAdmin, withdrawalSalesById, withdrawnSaleIds]);
 
   const summary = useMemo(() => {
     const revenue = filteredByDate.reduce((sum, item) => sum + item.totalAmount, 0);
@@ -946,7 +946,7 @@ export function SalesDashboardScreen() {
         <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
       </section>
 
-      {isAdmin ? <CashMovementHistory rows={cashMovementRows} /> : null}
+      <CashMovementHistory rows={cashMovementRows} />
 
       <section className="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]">
         <PremiumPanel glow="cyan" className="self-start">
