@@ -619,15 +619,15 @@ export function SalesDashboardScreen() {
 
   const summary = useMemo(() => {
     const revenue = filteredByDate.reduce((sum, item) => sum + item.totalAmount, 0);
-    const sellerCommission = filteredByDate.reduce((sum, item) => sum + item.commissionAmount, 0);
+    const sellerCommission = filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
     const teamSellerCommission = filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const operationCommission = filteredByDate.reduce((sum, item) => sum + ownerCommissionForSale(item), 0);
-    const totalCommission = operationCommission + teamSellerCommission;
-    const ownerPotential = filteredByDate.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0);
-    const ownerCommission = confirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0);
-    const receivableTodayRevenue = receivableToday.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0);
-    const futureReceivableRevenue = futureReceivables.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0);
-    const cashWithdrawn = activeWithdrawals.reduce((sum, item) => sum + item.amount, 0);
+    const operationCommission = isAdmin ? filteredByDate.reduce((sum, item) => sum + ownerCommissionForSale(item), 0) : sellerCommission;
+    const totalCommission = isAdmin ? operationCommission + teamSellerCommission : sellerCommission;
+    const ownerPotential = isAdmin ? filteredByDate.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+    const ownerCommission = isAdmin ? confirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0) : confirmedCashRows.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+    const receivableTodayRevenue = isAdmin ? receivableToday.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : receivableToday.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+    const futureReceivableRevenue = isAdmin ? futureReceivables.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : futureReceivables.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+    const cashWithdrawn = isAdmin ? activeWithdrawals.reduce((sum, item) => sum + item.amount, 0) : 0;
     const cashBalance = Math.max(0, ownerCommission - cashWithdrawn);
     const yesterdayRevenue = yesterdaySales.reduce((sum, item) => sum + item.totalAmount, 0);
     return {
@@ -650,7 +650,7 @@ export function SalesDashboardScreen() {
       yesterdayRevenue,
       yesterdayCount: yesterdaySales.length
     };
-  }, [activeWithdrawals, confirmedCashRows, filteredByDate, futureReceivables, receivableToday, yesterdaySales]);
+  }, [activeWithdrawals, confirmedCashRows, filteredByDate, futureReceivables, isAdmin, receivableToday, yesterdaySales]);
 
   async function refresh() {
     setIsLoading(true);
@@ -939,11 +939,11 @@ export function SalesDashboardScreen() {
 
       {error ? <div className="rounded-2xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm font-bold text-danger">{error}</div> : null}
 
-      <section className={cn("grid gap-4", isAdmin ? "xl:grid-cols-4" : "xl:grid-cols-2")}>
+      <section className="grid gap-4 xl:grid-cols-4">
         <CommandCard title="Hoje" value={brl(summary.revenue)} subtext={plural(summary.salesCount, "venda registrada", "vendas registradas")} helper={`Média ${brl(summary.averageTicket)}`} comparison={revenueComparison} tone="money" icon={<BarChart3 size={21} />} featured />
         <CommandCard title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
-        {isAdmin ? <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} /> : null}
-        {isAdmin ? <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={<button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button>} /> : null}
+        <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} />
+        <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
       </section>
 
       {isAdmin ? <CashMovementHistory rows={cashMovementRows} /> : null}
@@ -964,14 +964,14 @@ export function SalesDashboardScreen() {
               </div>
             }
           />
-          <MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} />
+          <MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />
           <MovementFooter items={movementItems} view={movementView} />
         </PremiumPanel>
 
         <PremiumPanel glow="purple">
           <PanelHeader icon={<Clock3 size={18} />} title="Caixa previsto" description="Carteira prevista. Só entra no caixa quando você marcar como pago." action={<button type="button" onClick={() => setCashTab("future")} className="rounded-xl border border-purple/25 bg-purple/10 px-3 py-2 text-xs font-semibold text-purple transition duration-[180ms] ease-out hover:bg-purple/15 hover:text-white">Ver próximos dias</button>} />
           <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/18 p-1.5"><TabButton active={cashTab === "today"} onClick={() => setCashTab("today")}>Período</TabButton><TabButton active={cashTab === "future"} onClick={() => setCashTab("future")}>Próximos dias</TabButton></div>
-          <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} />}</div>
+          <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />}</div>
           {activeWithdrawals.length ? <WithdrawalList withdrawals={activeWithdrawals.slice(0, 5)} /> : null}
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Total {cashTab === "today" ? "no período" : "próximos dias"}</p><p className="mt-2 text-3xl font-black text-white">{brl(activeCashTotal)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor que entra na carteira ao confirmar pagamento</p></div>
@@ -1195,7 +1195,7 @@ function CashStatusBadge({ tone, children }: { tone: "positive" | "negative" | "
   return <span className={cn("w-fit rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none shadow-none", className)}>{children}</span>;
 }
 
-function MovementTable({ items, view, onEdit, onDelete, onMarkPaid }: { items: SaleRecord[]; view: MovementView; onEdit: (item: SaleRecord) => void; onDelete: (item: SaleRecord) => void; onMarkPaid: (item: SaleRecord) => void }) {
+function MovementTable({ items, view, onEdit, onDelete, onMarkPaid, isAdmin }: { items: SaleRecord[]; view: MovementView; onEdit: (item: SaleRecord) => void; onDelete: (item: SaleRecord) => void; onMarkPaid: (item: SaleRecord) => void; isAdmin: boolean }) {
   const emptyMessage = view === "cash" ? "Nenhuma venda entrou no caixa neste período." : "Nenhuma venda registrada no período selecionado.";
   return (
     <div className="mt-5 overflow-hidden rounded-[28px] border border-cyan/10 bg-[#07111b]/78 shadow-[inset_0_1px_0_rgba(255,255,255,.035),0_16px_54px_rgba(0,0,0,.20)]">
@@ -1207,7 +1207,7 @@ function MovementTable({ items, view, onEdit, onDelete, onMarkPaid }: { items: S
             <span>Vendedor</span>
             <span className="text-center">Valor</span>
             <span className="text-center">Comissão</span>
-            <span className="text-center">Subcomissão</span>
+            {isAdmin ? <span className="text-center">Subcomissão</span> : null}
             <span className="text-center">Status</span>
             <span className="text-center">Ação</span>
           </div>
@@ -1222,8 +1222,8 @@ function MovementTable({ items, view, onEdit, onDelete, onMarkPaid }: { items: S
                   <div className="flex justify-start"><PlatformTag platformId={item.salePlatform} fallback={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus)} /></div>
                   <p className="truncate text-[13px] font-medium text-white/76">{item.sellerName}</p>
                   <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38 line-through decoration-rose-300/35" : "text-[#34D399]")}>{blocked ? "—" : brl(item.totalAmount)}</p>
-                  <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#38BDF8]")}>{blocked ? "—" : brl(ownerCommissionForSale(item))}</p>
-                  <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#A78BFA]")}>{blocked ? "—" : (subCommissionForSale(item) ? brl(subCommissionForSale(item)) : "—")}</p>
+                  <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#38BDF8]")}>{blocked ? "—" : brl(isAdmin ? ownerCommissionForSale(item) : subCommissionForSale(item))}</p>
+                  {isAdmin ? <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#A78BFA]")}>{blocked ? "—" : (subCommissionForSale(item) ? brl(subCommissionForSale(item)) : "—")}</p> : null}
                   <div className="flex justify-center"><SaleStatusBadge item={item} /></div>
                   <div className="flex items-center justify-center gap-1.5">
                     <button type="button" onClick={() => onEdit(item)} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-cyan/12 bg-cyan/[.075] text-cyan/90 transition duration-[180ms] ease-out hover:border-cyan/28 hover:bg-cyan/12 hover:text-white" aria-label={`Abrir venda de ${item.customerName}`} title="Abrir e editar venda"><Eye size={13} /></button>
@@ -1253,8 +1253,8 @@ function ViewToggleButton({ active, onClick, children }: { active: boolean; onCl
   return <button type="button" onClick={onClick} className={cn("rounded-xl px-3.5 py-2 text-[11px] font-medium uppercase tracking-[.08em] transition duration-[180ms] ease-out", active ? "bg-sky-300/[.09] text-sky-200 shadow-[inset_0_0_0_1px_rgba(125,211,252,.16)]" : "text-slate-400/72 hover:bg-white/[.035] hover:text-slate-100")}>{children}</button>;
 }
 
-function CashList({ items, onEdit, onDelete, onMarkPaid }: { items: SaleRecord[]; onEdit: (item: SaleRecord) => void; onDelete: (item: SaleRecord) => void; onMarkPaid: (item: SaleRecord) => void }) {
-  return <div className="space-y-2.5">{items.map((item) => <div key={item.id} className="group flex items-center justify-between gap-4 rounded-2xl border border-purple/15 bg-purple/[.035] p-3.5 transition duration-[180ms] ease-out hover:bg-purple/[.065]"><div className="min-w-0"><div className="flex items-center gap-2.5"><Tag tone={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus)} /><PlatformMini platformId={item.salePlatform} /><p className="truncate text-[14px] font-semibold tracking-[-.01em] text-white">{item.customerName}</p></div><p className="mt-1.5 text-[12px] font-normal text-white/58">{formatDate(item.expectedPaymentDate)} · {item.sellerName}</p></div><div className="flex items-center gap-2.5"><div className="text-right"><p className="whitespace-nowrap text-[14px] font-semibold tabular-nums tracking-[-.02em] text-[#F59E0B]">{brl(ownerWalletValueForSale(item))}</p><p className="text-[10px] font-medium uppercase tracking-[.08em] text-slate-500">previsto</p></div><button type="button" onClick={() => onEdit(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cyan/15 bg-cyan/10 text-cyan transition duration-[180ms] ease-out hover:border-cyan/35 hover:bg-cyan/15 hover:text-white" title="Abrir e editar venda"><Eye size={14} /></button><button type="button" onClick={() => onMarkPaid(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-money/25 bg-money/10 text-money shadow-[0_0_20px_rgba(16,185,129,.08)] transition duration-[180ms] ease-out hover:border-money/45 hover:bg-money/15 hover:text-white" aria-label={`Registrar caixa da venda de ${item.customerName}`} title="Registrar caixa / marcar venda como paga"><WalletCards size={14} /></button><button type="button" onClick={() => onDelete(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[.035] text-white/42 transition duration-[180ms] ease-out hover:border-danger/25 hover:bg-danger/10 hover:text-danger" title="Excluir venda"><Trash2 size={14} /></button></div></div>)}</div>;
+function CashList({ items, onEdit, onDelete, onMarkPaid, isAdmin }: { items: SaleRecord[]; onEdit: (item: SaleRecord) => void; onDelete: (item: SaleRecord) => void; onMarkPaid: (item: SaleRecord) => void; isAdmin: boolean }) {
+  return <div className="space-y-2.5">{items.map((item) => <div key={item.id} className="group flex items-center justify-between gap-4 rounded-2xl border border-purple/15 bg-purple/[.035] p-3.5 transition duration-[180ms] ease-out hover:bg-purple/[.065]"><div className="min-w-0"><div className="flex items-center gap-2.5"><Tag tone={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus)} /><PlatformMini platformId={item.salePlatform} /><p className="truncate text-[14px] font-semibold tracking-[-.01em] text-white">{item.customerName}</p></div><p className="mt-1.5 text-[12px] font-normal text-white/58">{formatDate(item.expectedPaymentDate)} · {item.sellerName}</p></div><div className="flex items-center gap-2.5"><div className="text-right"><p className="whitespace-nowrap text-[14px] font-semibold tabular-nums tracking-[-.02em] text-[#F59E0B]">{brl(isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item))}</p><p className="text-[10px] font-medium uppercase tracking-[.08em] text-slate-500">previsto</p></div><button type="button" onClick={() => onEdit(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cyan/15 bg-cyan/10 text-cyan transition duration-[180ms] ease-out hover:border-cyan/35 hover:bg-cyan/15 hover:text-white" title="Abrir e editar venda"><Eye size={14} /></button><button type="button" onClick={() => onMarkPaid(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-money/25 bg-money/10 text-money shadow-[0_0_20px_rgba(16,185,129,.08)] transition duration-[180ms] ease-out hover:border-money/45 hover:bg-money/15 hover:text-white" aria-label={`Registrar caixa da venda de ${item.customerName}`} title="Registrar caixa / marcar venda como paga"><WalletCards size={14} /></button><button type="button" onClick={() => onDelete(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[.035] text-white/42 transition duration-[180ms] ease-out hover:border-danger/25 hover:bg-danger/10 hover:text-danger" title="Excluir venda"><Trash2 size={14} /></button></div></div>)}</div>;
 }
 
 function SaleDrawer({ children, onClose }: { children: ReactNode; onClose: () => void }) {
@@ -1325,7 +1325,7 @@ function WithdrawalDrawer({ form, balance, cashRows, isSaving, onClose, onSubmit
                   <p className="truncate text-xs font-black text-white">{item.customerName}</p>
                   <p className="text-[11px] font-semibold text-white/45">{formatDate(cashDateForSale(item))} · {platformLabel(item)}</p>
                 </div>
-                <p className="text-sm font-black text-money">{brl(ownerWalletValueForSale(item))}</p>
+                <p className="text-sm font-black text-money">{brl(isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item))}</p>
               </div>
             )) : <p className="text-xs font-bold text-white/45">Nenhuma venda disponível para vincular neste período.</p>}
           </div>
