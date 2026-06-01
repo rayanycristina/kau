@@ -965,7 +965,7 @@ export function SalesDashboardScreen() {
             }
           />
           <MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />
-          <MovementFooter items={movementItems} view={movementView} />
+          <MovementFooter items={movementItems} view={movementView} isAdmin={isAdmin} />
         </PremiumPanel>
 
         <PremiumPanel glow="purple">
@@ -1143,7 +1143,7 @@ function CashMovementHistory({ rows }: { rows: CashMovementRow[] }) {
                           <span className="rounded-full border border-slate-300/[.065] bg-white/[.022] px-2.5 py-1 text-[11px] font-normal text-slate-400/75">{dailyRows.length} registro{dailyRows.length === 1 ? "" : "s"}</span>
                         </div>
                         <div className="flex items-center gap-4 tabular-nums">
-                          <p className={cn("text-[15px] font-semibold tracking-[-.02em]", dailyWithdrawals > 0 ? "text-[#FB7185]" : "text-white/92")}>{dailyWithdrawals > 0 ? `-${brl(dailyWithdrawals)}` : `+${brl(dailyEntries)}`}</p>
+                          <p className={cn("text-[15px] font-semibold tracking-[-.02em]", dailyEntries > 0 ? "text-white/92" : "text-[#FB7185]")}>{dailyEntries > 0 ? `+${brl(dailyEntries)}` : `-${brl(dailyWithdrawals)}`}</p>
                         </div>
                       </button>
                       {!isCollapsed ? <div className="cash-accordion-panel">{dailyRows.map((row) => <CashMovementLine key={row.id} row={row} />)}</div> : null}
@@ -1240,13 +1240,23 @@ function MovementTable({ items, view, onEdit, onDelete, onMarkPaid, isAdmin }: {
   );
 }
 
-function MovementFooter({ items, view }: { items: SaleRecord[]; view: MovementView }) {
+function MovementFooter({ items, view, isAdmin }: { items: SaleRecord[]; view: MovementView; isAdmin: boolean }) {
   const validItems = items.filter((item) => !isInvalidForMetrics(item));
   const total = validItems.reduce((sum, item) => sum + item.totalAmount, 0);
-  const commissions = validItems.reduce((sum, item) => sum + ownerCommissionForSale(item), 0);
-  const teamSellerCommission = validItems.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-  const cashTotal = validItems.reduce((sum, item) => sum + ownerCashForSale(item), 0);
-  return <div className="mt-4 grid gap-3 md:grid-cols-4"><FooterMetric label="Quantidade válida" value={view === "cash" ? plural(validItems.length, "entrada") : plural(validItems.length, "venda", "vendas")} /><FooterMetric label={view === "cash" ? "Total que entrou" : "Total vendido"} value={brl(view === "cash" ? cashTotal : total)} tone="money" /><FooterMetric label="Comissão" value={brl(commissions)} tone="purple" /><FooterMetric label="A pagar para vendedores" value={brl(teamSellerCommission)} tone="cyan" /></div>;
+  const operationCommission = validItems.reduce((sum, item) => sum + ownerCommissionForSale(item), 0);
+  const sellerCommission = validItems.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+  const cashTotal = validItems.reduce((sum, item) => sum + item.totalAmount, 0);
+  const commissionLabel = isAdmin ? "Comissão" : "Minha comissão";
+  const commissionValue = isAdmin ? operationCommission : sellerCommission;
+
+  return (
+    <div className={cn("mt-4 grid gap-3", isAdmin ? "md:grid-cols-4" : "md:grid-cols-3")}>
+      <FooterMetric label="Quantidade válida" value={view === "cash" ? plural(validItems.length, "entrada") : plural(validItems.length, "venda", "vendas")} />
+      <FooterMetric label={view === "cash" ? "Total que entrou" : "Total vendido"} value={brl(view === "cash" ? cashTotal : total)} tone="money" />
+      <FooterMetric label={commissionLabel} value={brl(commissionValue)} tone="purple" />
+      {isAdmin ? <FooterMetric label="A pagar para vendedores" value={brl(sellerCommission)} tone="cyan" /> : null}
+    </div>
+  );
 }
 
 function ViewToggleButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
