@@ -27,7 +27,7 @@ const baseItems = [
 export function Navigation() {
   const pathname = usePathname();
   const { profile, isAdmin, signOut } = useAuth();
-  const items = baseItems.filter((item) => !item.adminOnly || isAdmin);
+  const items = isAdmin ? baseItems : baseItems.filter((item) => item.href === "/sales");
   const initials = profile?.fullName
     ? profile.fullName
         .split(" ")

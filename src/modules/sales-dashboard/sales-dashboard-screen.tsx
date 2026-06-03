@@ -1010,16 +1010,16 @@ export function SalesDashboardScreen() {
 
       {error ? <div className="rounded-2xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm font-bold text-danger">{error}</div> : null}
 
-      <section className="grid gap-4 xl:grid-cols-4">
+      <section className={cn("grid gap-4", isAdmin ? "xl:grid-cols-4" : "xl:grid-cols-2")}>
         <CommandCard title="Hoje" value={brl(summary.revenue)} subtext={plural(summary.salesCount, "venda registrada", "vendas registradas")} helper={`Média ${brl(summary.averageTicket)}`} comparison={revenueComparison} tone="money" icon={<BarChart3 size={21} />} featured />
-        <CommandCard title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
-        <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} />
-        <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
+        <CommandCard title={isAdmin ? "Operação" : "Minha comissão"} value={brl(summary.totalCommission)} subtext={isAdmin ? "comissão total no período" : "comissão das minhas vendas"} helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
+        {isAdmin ? <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} /> : null}
+        {isAdmin ? <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={<button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button>} /> : null}
       </section>
 
       <CashMovementHistory rows={cashMovementRows} />
 
-      <section className="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]">
+      <section className={cn("grid items-start gap-5", isAdmin && "2xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]")}>
         <PremiumPanel glow="cyan" className="self-start">
           <PanelHeader
             icon={movementView === "cash" ? <WalletCards size={18} /> : <ClipboardList size={18} />}
@@ -1039,7 +1039,7 @@ export function SalesDashboardScreen() {
           <MovementFooter items={movementItems} view={movementView} isAdmin={isAdmin} />
         </PremiumPanel>
 
-        <PremiumPanel glow="purple">
+        {isAdmin ? <PremiumPanel glow="purple">
           <PanelHeader icon={<Clock3 size={18} />} title="Caixa previsto" description="Carteira prevista. Só entra no caixa quando você marcar como pago." action={<button type="button" onClick={() => setCashTab("future")} className="rounded-xl border border-purple/25 bg-purple/10 px-3 py-2 text-xs font-semibold text-purple transition duration-[180ms] ease-out hover:bg-purple/15 hover:text-white">Ver próximos dias</button>} />
           <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/18 p-1.5"><TabButton active={cashTab === "today"} onClick={() => setCashTab("today")}>Período</TabButton><TabButton active={cashTab === "future"} onClick={() => setCashTab("future")}>Próximos dias</TabButton></div>
           <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />}</div>
@@ -1048,12 +1048,12 @@ export function SalesDashboardScreen() {
             <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Total {cashTab === "today" ? "no período" : "próximos dias"}</p><p className="mt-2 text-3xl font-black text-white">{brl(activeCashTotal)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor que entra na carteira ao confirmar pagamento</p></div>
             <div className="rounded-2xl border border-amber/20 bg-amber/10 p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Saques no período</p><p className="mt-2 text-3xl font-black text-amber">{brl(summary.cashWithdrawn)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor retirado do caixa</p></div>
           </div>
-        </PremiumPanel>
+        </PremiumPanel> : null}
       </section>
 
       <PremiumPanel glow="none" className="p-5">
         <PanelHeader icon={<ArrowUpRight size={18} />} title="Resumo da operação" description={`Visão rápida do que aconteceu em ${activePeriodLabel}.`} />
-        <div className="mt-4 grid gap-3 md:grid-cols-3"><MiniIndicator label="Vendas registradas" value={String(summary.salesCount)} tone="cyan" /><MiniIndicator label="Minha comissão" value={brl(summary.operationCommission)} tone="purple" /><MiniIndicator label="Saldo no caixa" value={brl(summary.programmedCash)} tone="money" /></div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3"><MiniIndicator label="Vendas registradas" value={String(summary.salesCount)} tone="cyan" /><MiniIndicator label="Minha comissão" value={brl(summary.operationCommission)} tone="purple" /><MiniIndicator label={isAdmin ? "Saldo no caixa" : "Ticket médio"} value={brl(isAdmin ? summary.programmedCash : summary.averageTicket)} tone="money" /></div>
       </PremiumPanel>
 
       {isSaleDrawerOpen ? (

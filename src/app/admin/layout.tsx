@@ -14,14 +14,14 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   }
 
   if (!hasSupabaseAdminConfig()) {
-    redirect("/");
+    redirect("/sales");
   }
 
   const admin = getSupabaseAdminClient();
   const { data: profile } = await admin.from("user_profiles").select("role,is_active").eq("id", user.id).maybeSingle();
 
   if (!profile || profile.role !== "admin" || !profile.is_active) {
-    redirect("/");
+    redirect("/sales");
   }
 
   return children;

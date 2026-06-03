@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const publicPaths = ["/login", "/api/auth/callback", "/api/auth/logout"];
+const sellerHomePath = "/sales";
 
 function isPublicPath(pathname: string) {
   if (publicPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))) return true;
@@ -58,7 +59,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(homeUrl);
   }
 
-  if (user && pathname.startsWith("/admin")) {
+  if (user && !pathname.startsWith("/api/") && !isPublicPath(pathname)) {
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!serviceRoleKey) return response;
 
@@ -68,11 +69,21 @@ export async function middleware(request: NextRequest) {
     });
     const { data: profile } = await admin.from("user_profiles").select("role,is_active").eq("id", user.id).maybeSingle();
 
-    if (!profile || profile.role !== "admin" || !profile.is_active) {
-      const homeUrl = request.nextUrl.clone();
-      homeUrl.pathname = "/";
-      homeUrl.search = "";
-      return NextResponse.redirect(homeUrl);
+    const isActiveAdmin = profile?.role === "admin" && profile.is_active;
+    const isActiveSeller = profile?.role === "seller" && profile.is_active;
+
+    if (isActiveSeller && !pathname.startsWith(sellerHomePath)) {
+      const salesUrl = request.nextUrl.clone();
+      salesUrl.pathname = sellerHomePath;
+      salesUrl.search = "";
+      return NextResponse.redirect(salesUrl);
+    }
+
+    if (pathname.startsWith("/admin") && !isActiveAdmin) {
+      const salesUrl = request.nextUrl.clone();
+      salesUrl.pathname = sellerHomePath;
+      salesUrl.search = "";
+      return NextResponse.redirect(salesUrl);
     }
   }
 
