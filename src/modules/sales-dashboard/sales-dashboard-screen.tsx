@@ -449,7 +449,7 @@ export function SalesDashboardScreen() {
     }
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isAdmin, isSeller]);
 
   useEffect(() => {
     if (!profile || !isSeller) return;
@@ -624,7 +624,7 @@ export function SalesDashboardScreen() {
       const bTime = new Date(b.createdAt || b.withdrawnAt || "").getTime();
       return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
     });
-    if (isAdmin) withdrawalsInSequence.forEach((withdrawal, index) => {
+    withdrawalsInSequence.forEach((withdrawal, index) => {
       const linkedSales = (withdrawal.saleIds || []).map((id) => withdrawalSalesById.get(id)).filter(Boolean) as SaleRecord[];
       const withdrawalNumber = withdrawal.note?.match(/(\d+)/)?.[1] ? `Saque ${withdrawal.note.match(/(\d+)/)?.[1].padStart(3, "0")}` : `Saque ${String(index + 1).padStart(3, "0")}`;
       rows.push({
@@ -660,7 +660,7 @@ export function SalesDashboardScreen() {
     const ownerCommission = isAdmin ? confirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0) : confirmedCashRows.reduce((sum, item) => sum + subCommissionForSale(item), 0);
     const receivableTodayRevenue = isAdmin ? receivableToday.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : receivableToday.reduce((sum, item) => sum + subCommissionForSale(item), 0);
     const futureReceivableRevenue = isAdmin ? futureReceivables.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : futureReceivables.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const cashWithdrawn = isAdmin ? activeWithdrawals.reduce((sum, item) => sum + item.amount, 0) : 0;
+    const cashWithdrawn = activeWithdrawals.reduce((sum, item) => sum + item.amount, 0);
     const cashBalance = Math.max(0, ownerCommission - cashWithdrawn);
     const yesterdayRevenue = yesterdaySales.reduce((sum, item) => sum + item.totalAmount, 0);
     return {
@@ -693,7 +693,7 @@ export function SalesDashboardScreen() {
       if (!salesResponse.ok) throw new Error(payload?.error || "Erro ao carregar vendas.");
       setSales((payload.sales ?? []) as SaleRecord[]);
 
-      if (isAdmin) {
+      if (isAdmin || isSeller) {
         const withdrawalsResponse = await fetch(`/api/cash-withdrawals?t=${Date.now()}`, { cache: "no-store", credentials: "include" });
         const withdrawalsPayload = await withdrawalsResponse.json().catch(() => ({}));
         if (!withdrawalsResponse.ok) throw new Error(withdrawalsPayload?.error || "Erro ao carregar saques.");
@@ -938,7 +938,7 @@ export function SalesDashboardScreen() {
       for (const cashSale of availableCashRowsForWithdrawal) {
         if (remaining <= 0) break;
         selectedSaleIds.push(cashSale.id);
-        remaining -= ownerWalletValueForSale(cashSale);
+        remaining -= isAdmin ? ownerWalletValueForSale(cashSale) : subCommissionForSale(cashSale);
       }
       const response = await fetch("/api/cash-withdrawals", {
         method: "POST",
@@ -964,7 +964,7 @@ export function SalesDashboardScreen() {
     : "Comparativo pronto para histórico";
 
   const activeCashItems = cashTab === "today" ? receivableToday : futureReceivables;
-  const activeCashTotal = activeCashItems.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0);
+  const activeCashTotal = activeCashItems.reduce((sum, item) => sum + (isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item)), 0);
 
   return (
     <div className="kau-billion-sales space-y-4 pb-0">
@@ -1014,7 +1014,7 @@ export function SalesDashboardScreen() {
         <CommandCard title="Hoje" value={brl(summary.revenue)} subtext={plural(summary.salesCount, "venda registrada", "vendas registradas")} helper={`Média ${brl(summary.averageTicket)}`} comparison={revenueComparison} tone="money" icon={<BarChart3 size={21} />} featured />
         <CommandCard title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
         <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} />
-        <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
+        <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin || isSeller ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
       </section>
 
       <CashMovementHistory rows={cashMovementRows} />
@@ -1081,6 +1081,7 @@ export function SalesDashboardScreen() {
           linkedSales={selectedWithdrawalSales}
           missingSalesCount={selectedWithdrawalMissingSales}
           noteDraft={withdrawalNoteDraft}
+          isAdmin={isAdmin}
           isSaving={isWithdrawalNoteSaving}
           onClose={closeWithdrawalDetails}
           onNoteChange={setWithdrawalNoteDraft}
@@ -1404,11 +1405,12 @@ function WithdrawalList({ withdrawals, onOpen }: { withdrawals: CashWithdrawal[]
   );
 }
 
-function WithdrawalDetailsDrawer({ withdrawal, linkedSales, missingSalesCount, noteDraft, isSaving, onClose, onNoteChange, onSubmit }: {
+function WithdrawalDetailsDrawer({ withdrawal, linkedSales, missingSalesCount, noteDraft, isAdmin, isSaving, onClose, onNoteChange, onSubmit }: {
   withdrawal: CashWithdrawal;
   linkedSales: SaleRecord[];
   missingSalesCount: number;
   noteDraft: string;
+  isAdmin: boolean;
   isSaving: boolean;
   onClose: () => void;
   onNoteChange: (value: string) => void;
@@ -1442,7 +1444,7 @@ function WithdrawalDetailsDrawer({ withdrawal, linkedSales, missingSalesCount, n
                   <p className="mt-1 text-[11px] font-semibold text-white/45">{saleOrderNumber(sale)} - {sale.sellerName} - {platformLabel(sale)}</p>
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="text-sm font-black text-money">{brl(ownerWalletValueForSale(sale))}</p>
+                  <p className="text-sm font-black text-money">{brl(isAdmin ? ownerWalletValueForSale(sale) : subCommissionForSale(sale))}</p>
                   <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[.08em] text-white/38">{formatShortDate(cashDateForSale(sale))}</p>
                 </div>
               </div>
