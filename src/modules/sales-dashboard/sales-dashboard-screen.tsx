@@ -561,9 +561,25 @@ export function SalesDashboardScreen() {
     return ids;
   }, [cashWithdrawals]);
 
-  const availableCashRowsForWithdrawal = useMemo(() => {
-    return confirmedCashRows.filter((item) => !withdrawnSaleIds.has(item.id));
-  }, [confirmedCashRows, withdrawnSaleIds]);
+  const allConfirmedCashRowsForWithdrawal = useMemo(() => {
+    return sales
+      .filter((item) => {
+        if (!getSaleFinancialState(item).countsCash) return false;
+        if (!isReceivable(item)) return false;
+        if (!cashDateForSale(item)) return false;
+        if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
+        if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
+        if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
+        return !withdrawnSaleIds.has(item.id);
+      })
+      .sort((a, b) => String(cashDateForSale(b) || "").localeCompare(String(cashDateForSale(a) || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }, [sales, withdrawnSaleIds, dashboardSeller, dashboardType, dashboardPlatform]);
+
+  const availableCashRowsForWithdrawal = allConfirmedCashRowsForWithdrawal;
+
+  const availableCashTotalForWithdrawal = useMemo(() => {
+    return availableCashRowsForWithdrawal.reduce((sum, item) => sum + (isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item)), 0);
+  }, [availableCashRowsForWithdrawal, isAdmin]);
 
   const withdrawalSalesById = useMemo(() => {
     return new Map(sales.map((item) => [item.id, item]));
@@ -593,7 +609,7 @@ export function SalesDashboardScreen() {
     });
     if (isAdmin) withdrawalsInSequence.forEach((withdrawal, index) => {
       const linkedSales = (withdrawal.saleIds || []).map((id) => withdrawalSalesById.get(id)).filter(Boolean) as SaleRecord[];
-      const withdrawalNumber = `Saque ${String(index + 1).padStart(3, "0")}`;
+      const withdrawalNumber = withdrawal.note?.match(/(\d+)/)?.[1] ? `Saque ${withdrawal.note.match(/(\d+)/)?.[1].padStart(3, "0")}` : `Saque ${String(index + 1).padStart(3, "0")}`;
       rows.push({
         id: `withdrawal-${withdrawal.id}`,
         date: withdrawal.withdrawnAt,
@@ -847,7 +863,7 @@ export function SalesDashboardScreen() {
   }
 
   function openWithdrawalDrawer() {
-    setWithdrawalForm({ amount: summary.programmedCash ? String(summary.programmedCash.toFixed(2)).replace(".", ",") : "", withdrawnAt: activePeriod.end || todayKey(), note: "Saque do caixa" });
+    setWithdrawalForm({ amount: availableCashTotalForWithdrawal ? String(availableCashTotalForWithdrawal.toFixed(2)).replace(".", ",") : "", withdrawnAt: todayKey(), note: "Saque do caixa" });
     setIsWithdrawalDrawerOpen(true);
   }
 
@@ -1247,7 +1263,7 @@ function MovementFooter({ items, view, isAdmin }: { items: SaleRecord[]; view: M
   const sellerCommission = validItems.reduce((sum, item) => sum + subCommissionForSale(item), 0);
   const cashTotal = validItems.reduce((sum, item) => sum + item.totalAmount, 0);
   const commissionLabel = isAdmin ? "Comissão" : "Minha comissão";
-  const commissionValue = isAdmin ? operationCommission : sellerCommission;
+  const commissionValue = isAdmin && view === "cash" ? operationCommission + sellerCommission : isAdmin ? operationCommission : sellerCommission;
 
   return (
     <div className={cn("mt-4 grid gap-3", isAdmin ? "md:grid-cols-4" : "md:grid-cols-3")}>
@@ -1287,7 +1303,10 @@ function WithdrawalList({ withdrawals }: { withdrawals: CashWithdrawal[] }) {
         const bTime = new Date(b.createdAt || b.withdrawnAt || "").getTime();
         return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
       })
-      .map((item, index) => [item.id, `Saque ${String(index + 1).padStart(3, "0")}`])
+      .map((item, index) => {
+        const noteNumber = item.note?.match(/(\d+)/)?.[1];
+        return [item.id, noteNumber ? `Saque ${noteNumber.padStart(3, "0")}` : `Saque ${String(index + 1).padStart(3, "0")}`];
+      })
   );
 
   return (
