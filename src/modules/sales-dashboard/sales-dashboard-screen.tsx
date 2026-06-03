@@ -430,6 +430,9 @@ export function SalesDashboardScreen() {
   const [isWithdrawalDrawerOpen, setIsWithdrawalDrawerOpen] = useState(false);
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>({ amount: "", withdrawnAt: todayKey(), note: "" });
   const [isWithdrawalSaving, setIsWithdrawalSaving] = useState(false);
+  const [selectedWithdrawalId, setSelectedWithdrawalId] = useState<string | null>(null);
+  const [withdrawalNoteDraft, setWithdrawalNoteDraft] = useState("");
+  const [isWithdrawalNoteSaving, setIsWithdrawalNoteSaving] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string>("");
@@ -565,7 +568,6 @@ export function SalesDashboardScreen() {
     return sales
       .filter((item) => {
         if (!getSaleFinancialState(item).countsCash) return false;
-        if (!isReceivable(item)) return false;
         if (!cashDateForSale(item)) return false;
         if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
         if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
@@ -584,6 +586,21 @@ export function SalesDashboardScreen() {
   const withdrawalSalesById = useMemo(() => {
     return new Map(sales.map((item) => [item.id, item]));
   }, [sales]);
+
+  const selectedWithdrawal = useMemo(() => {
+    if (!selectedWithdrawalId) return null;
+    return cashWithdrawals.find((item) => item.id === selectedWithdrawalId) ?? null;
+  }, [cashWithdrawals, selectedWithdrawalId]);
+
+  const selectedWithdrawalSales = useMemo(() => {
+    if (!selectedWithdrawal) return [];
+    return (selectedWithdrawal.saleIds || []).map((id) => withdrawalSalesById.get(id)).filter(Boolean) as SaleRecord[];
+  }, [selectedWithdrawal, withdrawalSalesById]);
+
+  const selectedWithdrawalMissingSales = useMemo(() => {
+    if (!selectedWithdrawal) return 0;
+    return (selectedWithdrawal.saleIds || []).filter((id) => !withdrawalSalesById.has(id)).length;
+  }, [selectedWithdrawal, withdrawalSalesById]);
 
   const cashMovementRows = useMemo(() => {
     const rows: CashMovementRow[] = [];
@@ -867,6 +884,44 @@ export function SalesDashboardScreen() {
     setIsWithdrawalDrawerOpen(true);
   }
 
+  function openWithdrawalDetails(withdrawal: CashWithdrawal) {
+    setSelectedWithdrawalId(withdrawal.id);
+    setWithdrawalNoteDraft(withdrawal.note || "Saque do caixa");
+    setError(null);
+  }
+
+  function closeWithdrawalDetails() {
+    setSelectedWithdrawalId(null);
+    setWithdrawalNoteDraft("");
+  }
+
+  async function submitWithdrawalNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedWithdrawal) return;
+    setIsWithdrawalNoteSaving(true);
+    setError(null);
+    setToast(null);
+    try {
+      const response = await fetch(`/api/cash-withdrawals?id=${selectedWithdrawal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        credentials: "include",
+        body: JSON.stringify({ note: withdrawalNoteDraft })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result?.error || "Nao foi possivel atualizar o saque.");
+      const updated = result.withdrawal as CashWithdrawal;
+      setCashWithdrawals((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setWithdrawalNoteDraft(updated.note || "Saque do caixa");
+      setToast({ title: "Saque atualizado", message: `${updated.note || "Saque do caixa"} foi salvo.`, tone: "amber" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao atualizar saque.");
+    } finally {
+      setIsWithdrawalNoteSaving(false);
+    }
+  }
+
   async function submitWithdrawal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const amount = parseMoney(withdrawalForm.amount);
@@ -988,7 +1043,7 @@ export function SalesDashboardScreen() {
           <PanelHeader icon={<Clock3 size={18} />} title="Caixa previsto" description="Carteira prevista. Só entra no caixa quando você marcar como pago." action={<button type="button" onClick={() => setCashTab("future")} className="rounded-xl border border-purple/25 bg-purple/10 px-3 py-2 text-xs font-semibold text-purple transition duration-[180ms] ease-out hover:bg-purple/15 hover:text-white">Ver próximos dias</button>} />
           <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/18 p-1.5"><TabButton active={cashTab === "today"} onClick={() => setCashTab("today")}>Período</TabButton><TabButton active={cashTab === "future"} onClick={() => setCashTab("future")}>Próximos dias</TabButton></div>
           <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />}</div>
-          {activeWithdrawals.length ? <WithdrawalList withdrawals={activeWithdrawals.slice(0, 5)} /> : null}
+          {activeWithdrawals.length ? <WithdrawalList withdrawals={activeWithdrawals.slice(0, 5)} onOpen={openWithdrawalDetails} /> : null}
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Total {cashTab === "today" ? "no período" : "próximos dias"}</p><p className="mt-2 text-3xl font-black text-white">{brl(activeCashTotal)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor que entra na carteira ao confirmar pagamento</p></div>
             <div className="rounded-2xl border border-amber/20 bg-amber/10 p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Saques no período</p><p className="mt-2 text-3xl font-black text-amber">{brl(summary.cashWithdrawn)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor retirado do caixa</p></div>
@@ -1012,10 +1067,24 @@ export function SalesDashboardScreen() {
           form={withdrawalForm}
           balance={summary.programmedCash}
           cashRows={availableCashRowsForWithdrawal}
+          isAdmin={isAdmin}
           isSaving={isWithdrawalSaving}
           onClose={() => setIsWithdrawalDrawerOpen(false)}
           onSubmit={submitWithdrawal}
           onUpdate={(field, value) => setWithdrawalForm((current) => ({ ...current, [field]: value }))}
+        />
+      ) : null}
+
+      {selectedWithdrawal ? (
+        <WithdrawalDetailsDrawer
+          withdrawal={selectedWithdrawal}
+          linkedSales={selectedWithdrawalSales}
+          missingSalesCount={selectedWithdrawalMissingSales}
+          noteDraft={withdrawalNoteDraft}
+          isSaving={isWithdrawalNoteSaving}
+          onClose={closeWithdrawalDetails}
+          onNoteChange={setWithdrawalNoteDraft}
+          onSubmit={submitWithdrawalNote}
         />
       ) : null}
 
@@ -1295,7 +1364,7 @@ function SaleToast({ title, message, tone }: ToastState) {
   return <div className={cn("fixed right-5 top-5 z-50 flex max-w-md items-start gap-3 rounded-2xl border bg-[#07131c]/95 p-4 shadow-[0_20px_80px_rgba(0,0,0,.55)]", toneBorder(tone))}><div className={cn("rounded-xl border p-2", toneColor(tone))}><CheckCircle2 size={18} /></div><div><p className="text-sm font-black text-white">{title}</p><p className="mt-1 text-xs leading-5 text-white/68">{message}</p></div></div>;
 }
 
-function WithdrawalList({ withdrawals }: { withdrawals: CashWithdrawal[] }) {
+function WithdrawalList({ withdrawals, onOpen }: { withdrawals: CashWithdrawal[]; onOpen: (withdrawal: CashWithdrawal) => void }) {
   const withdrawalNumberById = new Map(
     [...withdrawals]
       .sort((a, b) => {
@@ -1317,20 +1386,79 @@ function WithdrawalList({ withdrawals }: { withdrawals: CashWithdrawal[] }) {
       </div>
       <div className="mt-3 space-y-2.5">
         {withdrawals.map((item) => (
-          <div key={item.id} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-300/[.06] bg-[#080D16]/72 px-3.5 py-3 transition duration-[180ms] ease-out hover:bg-white/[.035]">
+          <button key={item.id} type="button" onClick={() => onOpen(item)} className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-300/[.06] bg-[#080D16]/72 px-3.5 py-3 text-left transition duration-[180ms] ease-out hover:border-amber/25 hover:bg-white/[.035]">
             <div className="min-w-0">
               <p className="text-[13px] font-semibold tracking-[-.01em] text-slate-100">{withdrawalNumberById.get(item.id) || "Saque"}</p>
               <p className="mt-0.5 truncate text-[12px] font-normal text-slate-400/70">{item.note || "Saque do caixa"} · {formatDate(item.withdrawnAt)}</p>
             </div>
-            <p className="text-[14px] font-semibold tabular-nums tracking-[-.02em] text-[#FB7185]">-{brl(item.amount)}</p>
-          </div>
+            <div className="flex shrink-0 items-center gap-2.5">
+              <p className="text-[14px] font-semibold tabular-nums tracking-[-.02em] text-[#FB7185]">-{brl(item.amount)}</p>
+              <span className="grid h-8 w-8 place-items-center rounded-lg border border-amber/18 bg-amber/10 text-amber transition duration-[180ms] ease-out group-hover:border-amber/35 group-hover:bg-amber/15 group-hover:text-white" aria-hidden="true">
+                <Eye size={14} />
+              </span>
+            </div>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-function WithdrawalDrawer({ form, balance, cashRows, isSaving, onClose, onSubmit, onUpdate }: { form: WithdrawalForm; balance: number; cashRows: SaleRecord[]; isSaving: boolean; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onUpdate: <K extends keyof WithdrawalForm>(field: K, value: WithdrawalForm[K]) => void }) {
+function WithdrawalDetailsDrawer({ withdrawal, linkedSales, missingSalesCount, noteDraft, isSaving, onClose, onNoteChange, onSubmit }: {
+  withdrawal: CashWithdrawal;
+  linkedSales: SaleRecord[];
+  missingSalesCount: number;
+  noteDraft: string;
+  isSaving: boolean;
+  onClose: () => void;
+  onNoteChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <SaleDrawer onClose={onClose}>
+      <form onSubmit={onSubmit} className="space-y-5">
+        <PanelHeader icon={<Eye size={18} />} title="Detalhes do saque" description={`${formatDate(withdrawal.withdrawnAt)} - ${brl(withdrawal.amount)} retirados do caixa.`} />
+        <div className="grid gap-3 md:grid-cols-3">
+          <Preview label="Valor sacado" value={brl(withdrawal.amount)} tone="danger" />
+          <Preview label="Data" value={formatDate(withdrawal.withdrawnAt)} tone="amber" />
+          <Preview label="Vendas" value={String(withdrawal.saleIds?.length || 0)} tone="cyan" />
+        </div>
+        <Field label="Nome/observacao do saque">
+          <textarea className={cn(inputClass, "min-h-24 resize-none")} value={noteDraft} onChange={(event) => onNoteChange(event.target.value)} placeholder="Saque do caixa" />
+        </Field>
+        <div className="rounded-2xl border border-white/10 bg-white/[.03] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-[10px] font-black uppercase tracking-[.16em] text-white/50">Vendas vinculadas</p>
+            <p className="text-xs font-black text-white/46">{linkedSales.length} encontradas</p>
+          </div>
+          <div className="mt-3 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+            {linkedSales.length ? linkedSales.map((sale) => (
+              <div key={sale.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/18 px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Tag tone={saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus)} />
+                    <p className="truncate text-xs font-black text-white">{sale.customerName}</p>
+                  </div>
+                  <p className="mt-1 text-[11px] font-semibold text-white/45">{saleOrderNumber(sale)} - {sale.sellerName} - {platformLabel(sale)}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-sm font-black text-money">{brl(ownerWalletValueForSale(sale))}</p>
+                  <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[.08em] text-white/38">{formatShortDate(cashDateForSale(sale))}</p>
+                </div>
+              </div>
+            )) : <p className="text-xs font-bold text-white/45">Nenhuma venda encontrada para os IDs vinculados.</p>}
+          </div>
+          {missingSalesCount ? <p className="mt-3 text-[11px] font-semibold text-amber/75">{missingSalesCount} ID{missingSalesCount === 1 ? "" : "s"} vinculado{missingSalesCount === 1 ? "" : "s"} nao apareceu{missingSalesCount === 1 ? "" : "ram"} na lista carregada.</p> : null}
+        </div>
+        <button disabled={isSaving} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-amber/30 bg-amber px-6 py-3 text-sm font-black text-[#160c02] shadow-[0_0_44px_rgba(245,158,11,.18)] transition hover:bg-[#ffb82e] disabled:opacity-60">
+          <Save size={17} /> {isSaving ? "Salvando..." : "Salvar saque"}
+        </button>
+      </form>
+    </SaleDrawer>
+  );
+}
+
+function WithdrawalDrawer({ form, balance, cashRows, isAdmin, isSaving, onClose, onSubmit, onUpdate }: { form: WithdrawalForm; balance: number; cashRows: SaleRecord[]; isAdmin: boolean; isSaving: boolean; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onUpdate: <K extends keyof WithdrawalForm>(field: K, value: WithdrawalForm[K]) => void }) {
   return (
     <SaleDrawer onClose={onClose}>
       <form onSubmit={onSubmit} className="space-y-5">
