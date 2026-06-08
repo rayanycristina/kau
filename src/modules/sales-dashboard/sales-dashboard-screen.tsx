@@ -31,7 +31,7 @@ import { getSaleFinancialState, isValidSaleForMetrics, normalizeOrderStatus as n
 const inputClass = "w-full rounded-2xl border border-slate-400/[.115] bg-[#060A11]/88 px-3.5 py-3 text-sm font-medium tracking-[-.012em] text-slate-100 outline-none shadow-[inset_0_1px_0_rgba(255,255,255,.035)] transition duration-[180ms] ease-out placeholder:text-slate-500 hover:border-slate-300/[.16] hover:bg-[#090F18]/92 focus:border-cyan/35 focus:bg-cyan/[.025] focus:shadow-[0_0_0_3px_rgba(24,215,255,.055),inset_0_1px_0_rgba(255,255,255,.05)] [color-scheme:dark] [&_option]:bg-[#050912] [&_option]:text-slate-100";
 const labelClass = "mb-2 block text-[10px] font-medium uppercase tracking-[.14em] text-slate-400/68";
 const sellerStorageKey = "kau:sellers:v1";
-const ownerCommissionPercent = 10;
+const ownerCommissionPercent = 15;
 const ownerSellerName = "Rayany";
 
 type SaleType = "pad" | "cod" | "advance";
@@ -150,12 +150,18 @@ function addBusinessDays(days: number) {
   return addBusinessDaysFromKey(todayKey(), days);
 }
 
-function saleTypeLabel(deliveryType?: string, paymentStatus?: PaymentStatus) {
+function saleTypeLabel(deliveryType?: string, paymentStatus?: PaymentStatus, paymentMethod?: string) {
   const type = String(deliveryType || "").toUpperCase();
   const payment = String(paymentStatus || "").toUpperCase();
-  if (type.includes("PAD")) return "PAD";
-  if (type.includes("COD") || payment === "COD") return "COD";
-  return "ANTECIPADO";
+  const method = String(paymentMethod || "").toUpperCase();
+
+  // REGRA CRÍTICA:
+  // Só considerar PAGAMENTO ANTECIPADO quando a venda foi marcada explicitamente assim.
+  // Não usar paymentStatus === "paid" para definir antecipado, porque PAD/COD pagos também ficam como paid.
+  if (type.includes("ANTECIPADO") || method.includes("ANTECIPADO") || method.includes("PAG-ANTECIPADO")) return "ANTECIPADO";
+  if (type.includes("COD") || payment === "COD" || method === "COD") return "COD";
+  if (type.includes("PAD") || method === "PAD") return "PAD";
+  return "PAD";
 }
 function platformFromRecord(item: SaleRecord) {
   return getSalesPlatform(item.salePlatform);
@@ -167,10 +173,10 @@ function platformLabel(item: SaleRecord) {
 
 
 function saleTypeFromRecord(item: SaleRecord): SaleType {
-  const label = saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus);
-  if (label === "PAD") return "pad";
+  const label = saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod);
+  if (label === "ANTECIPADO") return "advance";
   if (label === "COD") return "cod";
-  return "advance";
+  return "pad";
 }
 
 function formatDate(date?: string) {
@@ -230,20 +236,37 @@ function isOwnerSeller(name?: string) {
   return String(name || "").toLowerCase().includes(ownerSellerName.toLowerCase());
 }
 
-function ownerCommissionForSale(item: SaleRecord) {
-  if (isFinanciallyBlocked(item)) return 0;
-  const base = item.totalAmount || 0;
-  const percent = isOwnerSeller(item.sellerName) ? (item.commissionRate || 15) : ownerCommissionPercent;
-  return Math.round(base * (percent / 100) * 100) / 100;
+function commissionPercentFromRecord(value?: number | null, fallback = 5) {
+  const raw = Number(value ?? fallback);
+  if (!Number.isFinite(raw) || raw <= 0) return fallback;
+  // Aceita tanto comissão salva como 7.5 quanto como 0.075.
+  return raw <= 1 ? raw * 100 : raw;
 }
 
 function subCommissionForSale(item: SaleRecord) {
   if (isFinanciallyBlocked(item)) return 0;
   if (isOwnerSeller(item.sellerName)) return 0;
   const base = item.totalAmount || 0;
-  // Regra operacional fixa: venda feita por vendedora gera 5% a repassar.
-  // Não usar item.commissionAmount como fonte única porque vendas antigas podem ter sido gravadas com taxa diferente.
-  return Math.round(base * 0.05 * 100) / 100;
+  const percent = commissionPercentFromRecord(item.commissionRate, 5);
+  return Math.round(base * (percent / 100) * 100) / 100;
+}
+
+function ownerCommissionForSale(item: SaleRecord) {
+  if (isFinanciallyBlocked(item)) return 0;
+  const base = item.totalAmount || 0;
+
+  // Venda feita pela Rayany/dona: recebe a comissão configurada da própria venda.
+  if (isOwnerSeller(item.sellerName)) {
+    const percent = commissionPercentFromRecord(item.commissionRate, 15);
+    return Math.round(base * (percent / 100) * 100) / 100;
+  }
+
+  // Venda feita por vendedora: a subcomissão dela sai de dentro dos 15% da operação.
+  // Se a vendedora ganhar 5%, minha comissão fica 10%.
+  // Se a vendedora ganhar 7,5%, minha comissão fica 7,5%.
+  const operationTotal = base * (ownerCommissionPercent / 100);
+  const sellerShare = subCommissionForSale(item);
+  return Math.round(Math.max(0, operationTotal - sellerShare) * 100) / 100;
 }
 
 function isPaidSale(item: SaleRecord) {
@@ -281,7 +304,7 @@ function operationCommissionForSale(item: SaleRecord) {
 }
 
 function isReceivable(item: SaleRecord) {
-  const type = saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus);
+  const type = saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod);
   return !isPaidSale(item) && (type === "PAD" || type === "COD" || item.paymentStatus !== "paid");
 }
 
@@ -473,7 +496,13 @@ export function SalesDashboardScreen() {
   const commissionPercent = useMemo(() => normalizeCommissionPercent(sale.commissionPercent, 0), [sale.commissionPercent]);
   const sellerCommissionPreview = useMemo(() => Math.round(financialPreviewTotal * (commissionPercent / 100) * 100) / 100, [financialPreviewTotal, commissionPercent]);
   const ownerCommissionPreview = useMemo(() => {
-    return isOwnerSeller(sale.sellerName) ? sellerCommissionPreview : Math.round(financialPreviewTotal * (ownerCommissionPercent / 100) * 100) / 100;
+    if (isOwnerSeller(sale.sellerName)) return sellerCommissionPreview;
+
+    // Venda feita por vendedora: a comissão dela sai de dentro dos 15% da operação.
+    // Ex.: venda R$ 997,00 com comissão da vendedora em 7,5%:
+    // operação 15% = R$ 149,55; subcomissão = R$ 74,77; minha comissão = R$ 74,78.
+    const operationTotal = Math.round(financialPreviewTotal * (ownerCommissionPercent / 100) * 100) / 100;
+    return Math.round(Math.max(0, operationTotal - sellerCommissionPreview) * 100) / 100;
   }, [sale.sellerName, financialPreviewTotal, sellerCommissionPreview]);
 
   const sellersForFilter = useMemo(() => Array.from(new Set([...sellers.map((seller) => seller.name), ...sales.map((item) => item.sellerName).filter(Boolean)])).sort(), [sales, sellers]);
@@ -486,7 +515,7 @@ export function SalesDashboardScreen() {
       const saleDateMatch = isDateInRange(item.saleDate || String(item.createdAt || "").slice(0, 10), activePeriod.start, activePeriod.end);
       if (!saleDateMatch) return false;
       if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
-      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
+      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     });
@@ -506,7 +535,7 @@ export function SalesDashboardScreen() {
       const cashDate = cashDateForSale(item);
       if (!isDateInRange(cashDate, activePeriod.start, activePeriod.end)) return false;
       if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
-      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
+      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     }).sort((a, b) => String(cashDateForSale(b) || "").localeCompare(String(cashDateForSale(a) || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -534,7 +563,7 @@ export function SalesDashboardScreen() {
       if (!isReceivable(item)) return false;
       if (!isDateInRange(item.expectedPaymentDate, activePeriod.start, activePeriod.end)) return false;
       if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
-      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
+      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     });
@@ -546,7 +575,7 @@ export function SalesDashboardScreen() {
       if (!isReceivable(item)) return false;
       if (!item.expectedPaymentDate || item.expectedPaymentDate <= activePeriod.end) return false;
       if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
-      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
+      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     }).sort((a, b) => String(a.expectedPaymentDate).localeCompare(String(b.expectedPaymentDate)));
@@ -570,7 +599,7 @@ export function SalesDashboardScreen() {
         if (!getSaleFinancialState(item).countsCash) return false;
         if (!cashDateForSale(item)) return false;
         if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
-        if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus) !== dashboardType) return false;
+        if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
         if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
         return !withdrawnSaleIds.has(item.id);
       })
@@ -605,16 +634,17 @@ export function SalesDashboardScreen() {
   const cashMovementRows = useMemo(() => {
     const rows: CashMovementRow[] = [];
     confirmedCashRows.forEach((sale) => {
+      const movementType = saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus, sale.paymentMethod);
       rows.push({
         id: `cash-${sale.id}`,
         date: cashDateForSale(sale) || todayKey(),
         kind: "entry",
         description: sale.customerName,
         order: saleOrderNumber(sale),
-        movement: `Entrada no caixa · ${saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus)}`,
+        movement: movementType === "ANTECIPADO" ? "Pagamento antecipado" : `Entrada no caixa · ${movementType}`,
         amount: isAdmin ? ownerWalletValueForSale(sale) : subCommissionForSale(sale),
         fee: isAdmin ? subCommissionForSale(sale) : 0,
-        net: isAdmin ? ownerWalletValueForSale(sale) : subCommissionForSale(sale),
+        net: isAdmin ? ownerCommissionForSale(sale) : subCommissionForSale(sale),
         status: withdrawnSaleIds.has(sale.id) ? "Sacada" : "Disponível",
         sale
       });
@@ -1162,7 +1192,18 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
           Status do pedido: {orderStatusLabel(sale.orderStatus)}. Esta venda permanece no histórico, mas entra como R$ 0,00 em faturamento, comissão, caixa e ranking após salvar. Valor original: {brl(rawSaleTotal)}.
         </div>
       ) : null}
-      <div className="grid gap-3 md:grid-cols-3"><Preview label="Valor contabilizado" value={brl(saleTotal)} tone="money" /><Preview label="Minha comissão" value={brl(ownerCommissionPreview)} tone="cyan" /><Preview label="Subcomissão" value={brl(isOwnerSeller(sale.sellerName) ? 0 : sellerCommissionPreview)} tone="purple" /></div>
+      {lockSeller ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          <Preview label="Valor contabilizado" value={brl(saleTotal)} tone="money" />
+          <Preview label="Minha comissão" value={brl(sellerCommissionPreview)} tone="cyan" />
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-3">
+          <Preview label="Valor contabilizado" value={brl(saleTotal)} tone="money" />
+          <Preview label="Minha comissão" value={brl(ownerCommissionPreview)} tone="cyan" />
+          <Preview label="Subcomissão" value={brl(isOwnerSeller(sale.sellerName) ? 0 : sellerCommissionPreview)} tone="purple" />
+        </div>
+      )}
       <button disabled={isSaving} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-money/30 bg-money px-6 py-3 text-sm font-black text-[#02130b] shadow-[0_0_44px_rgba(16,185,129,.2)] transition hover:bg-[#22e59b] disabled:opacity-60"><Plus size={17} /> {isSaving ? "Salvando..." : mode === "edit" ? "Salvar alterações" : "Lançar venda agora"}</button>
     </form>
   );
@@ -1305,7 +1346,7 @@ function MovementTable({ items, view, onEdit, onDelete, onMarkPaid, isAdmin }: {
               return (
                 <div key={item.id} className={cn("sales-movement-row grid items-center gap-3 border-b border-slate-300/[.055] px-4 py-[17px] transition duration-[180ms] ease-out last:border-b-0 hover:bg-white/[.032]", blocked && "bg-rose-950/[.055] opacity-[.92]")}>
                   <div className="min-w-0"><p className={cn("truncate text-[14px] font-semibold tracking-[-.01em] text-white", blocked && "text-white/72 line-through decoration-rose-300/35")}>{item.customerName}</p><p className="mt-1 truncate text-[12px] font-normal text-white/58">{item.city || "Sem cidade"} · {view === "cash" ? `caixa em ${formatDate(cashDate)}` : `venda em ${formatDate(item.saleDate || String(item.createdAt || "").slice(0, 10))}`}</p></div>
-                  <div className="flex justify-start"><PlatformTag platformId={item.salePlatform} fallback={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus)} /></div>
+                  <div className="flex justify-start"><PlatformTag platformId={item.salePlatform} fallback={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod)} /></div>
                   <p className="truncate text-[13px] font-medium text-white/76">{item.sellerName}</p>
                   <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38 line-through decoration-rose-300/35" : "text-[#34D399]")}>{blocked ? "—" : brl(item.totalAmount)}</p>
                   <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#38BDF8]")}>{blocked ? "—" : brl(isAdmin ? ownerCommissionForSale(item) : subCommissionForSale(item))}</p>
@@ -1350,7 +1391,7 @@ function ViewToggleButton({ active, onClick, children }: { active: boolean; onCl
 }
 
 function CashList({ items, onEdit, onDelete, onMarkPaid, isAdmin }: { items: SaleRecord[]; onEdit: (item: SaleRecord) => void; onDelete: (item: SaleRecord) => void; onMarkPaid: (item: SaleRecord) => void; isAdmin: boolean }) {
-  return <div className="space-y-2.5">{items.map((item) => <div key={item.id} className="group flex items-center justify-between gap-4 rounded-2xl border border-purple/15 bg-purple/[.035] p-3.5 transition duration-[180ms] ease-out hover:bg-purple/[.065]"><div className="min-w-0"><div className="flex items-center gap-2.5"><Tag tone={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus)} /><PlatformMini platformId={item.salePlatform} /><p className="truncate text-[14px] font-semibold tracking-[-.01em] text-white">{item.customerName}</p></div><p className="mt-1.5 text-[12px] font-normal text-white/58">{formatDate(item.expectedPaymentDate)} · {item.sellerName}</p></div><div className="flex items-center gap-2.5"><div className="text-right"><p className="whitespace-nowrap text-[14px] font-semibold tabular-nums tracking-[-.02em] text-[#F59E0B]">{brl(isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item))}</p><p className="text-[10px] font-medium uppercase tracking-[.08em] text-slate-500">previsto</p></div><button type="button" onClick={() => onEdit(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cyan/15 bg-cyan/10 text-cyan transition duration-[180ms] ease-out hover:border-cyan/35 hover:bg-cyan/15 hover:text-white" title="Abrir e editar venda"><Eye size={14} /></button><button type="button" onClick={() => onMarkPaid(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-money/25 bg-money/10 text-money shadow-[0_0_20px_rgba(16,185,129,.08)] transition duration-[180ms] ease-out hover:border-money/45 hover:bg-money/15 hover:text-white" aria-label={`Registrar caixa da venda de ${item.customerName}`} title="Registrar caixa / marcar venda como paga"><WalletCards size={14} /></button><button type="button" onClick={() => onDelete(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[.035] text-white/42 transition duration-[180ms] ease-out hover:border-danger/25 hover:bg-danger/10 hover:text-danger" title="Excluir venda"><Trash2 size={14} /></button></div></div>)}</div>;
+  return <div className="space-y-2.5">{items.map((item) => <div key={item.id} className="group flex items-center justify-between gap-4 rounded-2xl border border-purple/15 bg-purple/[.035] p-3.5 transition duration-[180ms] ease-out hover:bg-purple/[.065]"><div className="min-w-0"><div className="flex items-center gap-2.5"><Tag tone={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod)} /><PlatformMini platformId={item.salePlatform} /><p className="truncate text-[14px] font-semibold tracking-[-.01em] text-white">{item.customerName}</p></div><p className="mt-1.5 text-[12px] font-normal text-white/58">{formatDate(item.expectedPaymentDate)} · {item.sellerName}</p></div><div className="flex items-center gap-2.5"><div className="text-right"><p className="whitespace-nowrap text-[14px] font-semibold tabular-nums tracking-[-.02em] text-[#F59E0B]">{brl(isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item))}</p><p className="text-[10px] font-medium uppercase tracking-[.08em] text-slate-500">previsto</p></div><button type="button" onClick={() => onEdit(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cyan/15 bg-cyan/10 text-cyan transition duration-[180ms] ease-out hover:border-cyan/35 hover:bg-cyan/15 hover:text-white" title="Abrir e editar venda"><Eye size={14} /></button><button type="button" onClick={() => onMarkPaid(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-money/25 bg-money/10 text-money shadow-[0_0_20px_rgba(16,185,129,.08)] transition duration-[180ms] ease-out hover:border-money/45 hover:bg-money/15 hover:text-white" aria-label={`Registrar caixa da venda de ${item.customerName}`} title="Registrar caixa / marcar venda como paga"><WalletCards size={14} /></button><button type="button" onClick={() => onDelete(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[.035] text-white/42 transition duration-[180ms] ease-out hover:border-danger/25 hover:bg-danger/10 hover:text-danger" title="Excluir venda"><Trash2 size={14} /></button></div></div>)}</div>;
 }
 
 function SaleDrawer({ children, onClose }: { children: ReactNode; onClose: () => void }) {
@@ -1438,7 +1479,7 @@ function WithdrawalDetailsDrawer({ withdrawal, linkedSales, missingSalesCount, n
               <div key={sale.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/18 px-3 py-2.5">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <Tag tone={saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus)} />
+                    <Tag tone={saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus, sale.paymentMethod)} />
                     <p className="truncate text-xs font-black text-white">{sale.customerName}</p>
                   </div>
                   <p className="mt-1 text-[11px] font-semibold text-white/45">{saleOrderNumber(sale)} - {sale.sellerName} - {platformLabel(sale)}</p>
