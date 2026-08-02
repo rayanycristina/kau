@@ -44,19 +44,7 @@ export function getOrderStatusFromSale(sale: SaleStateInput): OrderStatus {
 }
 
 export function isPaymentConfirmed(sale: SaleStateInput): boolean {
-  const paymentStatus = String(sale.paymentStatus || sale.payment_status || "").toLowerCase();
-  const deliveryStatus = String(sale.deliveryStatus || sale.delivery_status || "").toLowerCase();
-  const deliveryType = String(sale.deliveryType || sale.delivery_type || "").toLowerCase();
-  const paymentMethod = String(sale.paymentMethod || sale.payment_method || "").toLowerCase();
-
-  return (
-    paymentStatus === "paid" ||
-    paymentStatus === "pago" ||
-    deliveryStatus === "delivered" ||
-    deliveryStatus === "entregue" ||
-    deliveryType.includes("antecip") ||
-    paymentMethod.includes("antecip")
-  );
+  return String(sale.paymentStatus || sale.payment_status || "").trim().toLowerCase() === "paid";
 }
 
 export function getSaleFinancialState(sale: SaleStateInput): SaleFinancialState {

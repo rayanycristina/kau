@@ -1,13 +1,19 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { useAuth } from "@/contexts/auth-context";
 import { useOperationStore } from "@/store/operation-store";
 import type { SalesSummary } from "@/data/sales-types";
 
 export function SalesBoot() {
+  const pathname = usePathname();
+  const { profile, isLoading } = useAuth();
   const hydrateSalesSummary = useOperationStore((s) => s.hydrateSalesSummary);
 
   useEffect(() => {
+    if (isLoading || !profile || pathname === "/sales") return;
+
     let ignore = false;
 
     async function loadSummary() {
@@ -27,7 +33,7 @@ export function SalesBoot() {
       ignore = true;
       window.clearInterval(interval);
     };
-  }, [hydrateSalesSummary]);
+  }, [hydrateSalesSummary, isLoading, pathname, profile]);
 
   return null;
 }

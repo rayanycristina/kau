@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  ReceiptText,
   Trash2,
   WalletCards,
   X
@@ -23,27 +24,33 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
 import { useNotificationStore } from "@/store/notification-store";
-import { commissionPercentToRate, defaultSellers, normalizeCommissionPercent } from "@/data/sellers";
+import { commissionPercentToRate, normalizeCommissionPercent } from "@/data/sellers";
 import { getSalesPlatform, salesPlatforms, type SalesPlatformId } from "@/data/sales-platforms";
 import type { DeliveryStatus, OrderStatus, OrderTag, PaymentStatus, SaleInput, SaleRecord, SellerProfile } from "@/data/sales-types";
 import { getSaleFinancialState, isValidSaleForMetrics, normalizeOrderStatus as normalizeOrderStatusCentral, saleVisualStatusLabel } from "@/data/sale-financial-state";
+import type { GuaranteeType } from "@/data/guarantee-types";
+import { formatMoneyInput, moneyFromCents, moneyToCents } from "@/data/money";
 
 const inputClass = "w-full rounded-2xl border border-slate-400/[.115] bg-[#060A11]/88 px-3.5 py-3 text-sm font-medium tracking-[-.012em] text-slate-100 outline-none shadow-[inset_0_1px_0_rgba(255,255,255,.035)] transition duration-[180ms] ease-out placeholder:text-slate-500 hover:border-slate-300/[.16] hover:bg-[#090F18]/92 focus:border-cyan/35 focus:bg-cyan/[.025] focus:shadow-[0_0_0_3px_rgba(24,215,255,.055),inset_0_1px_0_rgba(255,255,255,.05)] [color-scheme:dark] [&_option]:bg-[#050912] [&_option]:text-slate-100";
 const labelClass = "mb-2 block text-[10px] font-medium uppercase tracking-[.14em] text-slate-400/68";
-const sellerStorageKey = "kau:sellers:v1";
-const ownerCommissionPercent = 15;
-const ownerSellerName = "Rayany";
+const brazilianStates = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"] as const;
 
 type SaleType = "pad" | "cod" | "advance";
 type Tone = "money" | "cyan" | "purple" | "amber" | "danger" | "neutral";
 type CashTab = "today" | "future";
 type MovementView = "registered" | "cash";
+type MovementHistoryScope = "period" | "all";
 type DrawerMode = "create" | "edit";
 type PeriodMode = "today" | "3d" | "7d" | "30d" | "custom";
 
-type SaleForm = Omit<SaleInput, "productName" | "quantity" | "totalAmount"> & {
-  quantity: string;
+type SaleForm = Omit<SaleInput, "productName" | "quantity" | "kitQuantity" | "bottleQuantity" | "totalAmount" | "operationCommissionAmount"> & {
+  legacyQuantity?: number;
+  kitQuantity: string;
+  bottleQuantity: string;
   totalAmount: string;
+  totalAmountCents: number;
+  operationCommissionAmount: string;
+  operationCommissionAmountCents: number;
   commissionPercent: string;
   saleType: SaleType;
   salePlatform: SalesPlatformId | "";
@@ -70,6 +77,49 @@ type WithdrawalForm = {
   note: string;
 };
 
+type CoreSalesLoadResult = {
+  sales?: SaleRecord[];
+  withdrawals?: CashWithdrawal[];
+  errors: string[];
+};
+
+const coreSalesCacheDurationMs = 15_000;
+let pendingCoreSalesRequest: Promise<CoreSalesLoadResult> | null = null;
+let coreSalesCache: { result: CoreSalesLoadResult; loadedAt: number } | null = null;
+
+async function fetchDashboardResource<T>(url: string, key: string, fallbackMessage: string): Promise<T> {
+  const response = await fetch(url, { cache: "no-store", credentials: "include" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || fallbackMessage);
+  return (payload[key] ?? []) as T;
+}
+
+function loadCoreSalesData(force = false) {
+  if (!force && coreSalesCache && Date.now() - coreSalesCache.loadedAt < coreSalesCacheDurationMs) {
+    return Promise.resolve(coreSalesCache.result);
+  }
+  if (pendingCoreSalesRequest) return pendingCoreSalesRequest;
+
+  pendingCoreSalesRequest = Promise.allSettled([
+    fetchDashboardResource<SaleRecord[]>("/api/sales", "sales", "Erro ao carregar vendas."),
+    fetchDashboardResource<CashWithdrawal[]>("/api/cash-withdrawals", "withdrawals", "Erro ao carregar saques.")
+  ]).then(([salesResult, withdrawalsResult]) => {
+    const result: CoreSalesLoadResult = { errors: [] };
+    if (salesResult.status === "fulfilled") result.sales = salesResult.value;
+    else result.errors.push(salesResult.reason instanceof Error ? salesResult.reason.message : "Erro ao carregar vendas.");
+    if (withdrawalsResult.status === "fulfilled") result.withdrawals = withdrawalsResult.value;
+    else result.errors.push(withdrawalsResult.reason instanceof Error ? withdrawalsResult.reason.message : "Erro ao carregar saques.");
+    if (!result.errors.length) coreSalesCache = { result, loadedAt: Date.now() };
+    return result;
+  }).finally(() => {
+    pendingCoreSalesRequest = null;
+  });
+
+  return pendingCoreSalesRequest;
+}
+
+type GuaranteeDraft = { guaranteeType: GuaranteeType; guaranteeAmount: string; paid: boolean; setupRequired: boolean };
+
 type CashMovementRow = {
   id: string;
   date: string;
@@ -90,10 +140,17 @@ const initialSaleForm: SaleForm = {
   customerName: "",
   customerPhone: "",
   city: "",
-  quantity: "1",
+  state: "",
+  kitQuantity: "1",
+  bottleQuantity: "",
   totalAmount: "",
-  sellerName: "Gabriel Moreira",
-  commissionPercent: "5",
+  totalAmountCents: 0,
+  operationCommissionAmount: "",
+  operationCommissionAmountCents: 0,
+  operationCommissionPercent: null,
+  sellerName: "Rayany Cristina Feitosa da Silva",
+  sellerId: null,
+  commissionPercent: "0",
   saleType: "pad",
   salePlatform: "",
   paymentMethod: "PAD",
@@ -116,10 +173,7 @@ function brl(value: number) {
 }
 
 function parseMoney(value: string | number | undefined) {
-  if (typeof value === "number") return value;
-  const cleaned = String(value ?? "").replace(/R\$|\s/g, "").replace(/\./g, "").replace(",", ".");
-  const number = Number(cleaned);
-  return Number.isFinite(number) ? number : 0;
+  return moneyFromCents(moneyToCents(value));
 }
 
 function todayKey(date = new Date()) {
@@ -154,15 +208,12 @@ function saleTypeLabel(deliveryType?: string, paymentStatus?: PaymentStatus, pay
   const type = String(deliveryType || "").toUpperCase();
   const payment = String(paymentStatus || "").toUpperCase();
   const method = String(paymentMethod || "").toUpperCase();
-
-  // REGRA CRÍTICA:
-  // Só considerar PAGAMENTO ANTECIPADO quando a venda foi marcada explicitamente assim.
-  // Não usar paymentStatus === "paid" para definir antecipado, porque PAD/COD pagos também ficam como paid.
   if (type.includes("ANTECIPADO") || method.includes("ANTECIPADO") || method.includes("PAG-ANTECIPADO")) return "ANTECIPADO";
   if (type.includes("COD") || payment === "COD" || method === "COD") return "COD";
   if (type.includes("PAD") || method === "PAD") return "PAD";
   return "PAD";
 }
+
 function platformFromRecord(item: SaleRecord) {
   return getSalesPlatform(item.salePlatform);
 }
@@ -170,7 +221,6 @@ function platformFromRecord(item: SaleRecord) {
 function platformLabel(item: SaleRecord) {
   return platformFromRecord(item)?.name || "Sem plataforma";
 }
-
 
 function saleTypeFromRecord(item: SaleRecord): SaleType {
   const label = saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod);
@@ -217,56 +267,15 @@ function plural(count: number, singular: string, pluralText?: string) {
   return `${count} ${count === 1 ? singular : pluralText ?? `${singular}s`}`;
 }
 
-function loadSellers() {
-  if (typeof window === "undefined") return defaultSellers;
-  const stored = localStorage.getItem(sellerStorageKey);
-  if (!stored) {
-    localStorage.setItem(sellerStorageKey, JSON.stringify(defaultSellers));
-    return defaultSellers;
-  }
-  try {
-    const parsed = JSON.parse(stored) as SellerProfile[];
-    return parsed.length ? parsed : defaultSellers;
-  } catch {
-    return defaultSellers;
-  }
-}
-
-function isOwnerSeller(name?: string) {
-  return String(name || "").toLowerCase().includes(ownerSellerName.toLowerCase());
-}
-
-function commissionPercentFromRecord(value?: number | null, fallback = 5) {
-  const raw = Number(value ?? fallback);
-  if (!Number.isFinite(raw) || raw <= 0) return fallback;
-  // Aceita tanto comissão salva como 7.5 quanto como 0.075.
-  return raw <= 1 ? raw * 100 : raw;
-}
-
 function subCommissionForSale(item: SaleRecord) {
   if (isFinanciallyBlocked(item)) return 0;
-  if (isOwnerSeller(item.sellerName)) return 0;
-  const base = item.totalAmount || 0;
-  const percent = commissionPercentFromRecord(item.commissionRate, 5);
-  return Math.round(base * (percent / 100) * 100) / 100;
+  const amount = Number(item.commissionAmount);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0;
 }
 
 function ownerCommissionForSale(item: SaleRecord) {
   if (isFinanciallyBlocked(item)) return 0;
-  const base = item.totalAmount || 0;
-
-  // Venda feita pela Rayany/dona: recebe a comissão configurada da própria venda.
-  if (isOwnerSeller(item.sellerName)) {
-    const percent = commissionPercentFromRecord(item.commissionRate, 15);
-    return Math.round(base * (percent / 100) * 100) / 100;
-  }
-
-  // Venda feita por vendedora: a subcomissão dela sai de dentro dos 15% da operação.
-  // Se a vendedora ganhar 5%, minha comissão fica 10%.
-  // Se a vendedora ganhar 7,5%, minha comissão fica 7,5%.
-  const operationTotal = base * (ownerCommissionPercent / 100);
-  const sellerShare = subCommissionForSale(item);
-  return Math.round(Math.max(0, operationTotal - sellerShare) * 100) / 100;
+  return operationCommissionForSale(item);
 }
 
 function isPaidSale(item: SaleRecord) {
@@ -275,11 +284,7 @@ function isPaidSale(item: SaleRecord) {
 
 function operationCashValueForSale(item: SaleRecord) {
   if (isFinanciallyBlocked(item)) return 0;
-  const base = item.totalAmount || 0;
-  // REGRA CRÍTICA: o caixa/carteira/líquido representa a comissão TOTAL da operação.
-  // Mesmo em venda da Elisangela, Rayany recebe 15% no caixa e depois separa 5% para repassar.
-  // Por isso vendas antigas e novas devem sempre calcular entrada de caixa como 15% do valor da venda.
-  return Math.round(base * 0.15 * 100) / 100;
+  return operationCommissionForSale(item);
 }
 
 function ownerWalletValueForSale(item: SaleRecord) {
@@ -292,7 +297,7 @@ function ownerCashForSale(item: SaleRecord) {
 
 function cashDateForSale(item: SaleRecord) {
   if (!isPaidSale(item)) return undefined;
-  return item.paymentDate || item.receivedDate || item.expectedPaymentDate || item.saleDate || String(item.createdAt || "").slice(0, 10);
+  return item.paymentDate || item.saleDate || String(item.createdAt || "").slice(0, 10);
 }
 
 function saleOrderNumber(item: SaleRecord) {
@@ -300,30 +305,69 @@ function saleOrderNumber(item: SaleRecord) {
 }
 
 function operationCommissionForSale(item: SaleRecord) {
-  return ownerCommissionForSale(item);
+  if (item.operationCommissionAmount != null && Number.isFinite(item.operationCommissionAmount)) {
+    return Math.round(item.operationCommissionAmount * 100) / 100;
+  }
+  if (item.operationCommissionPercent != null && Number.isFinite(item.operationCommissionPercent)) {
+    return Math.round((item.totalAmount || 0) * (item.operationCommissionPercent / 100) * 100) / 100;
+  }
+  return 0;
+}
+
+function brazilPhoneDigits(value: string) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length > 11 && digits.startsWith("55") ? digits.slice(2, 13) : digits.slice(0, 11);
+}
+
+function formatBrazilPhone(value: string) {
+  const digits = brazilPhoneDigits(value);
+  if (!digits) return "";
+  if (digits.length <= 2) return `(${digits}`;
+  const ddd = digits.slice(0, 2);
+  const number = digits.slice(2);
+  if (number.length <= 4) return `(${ddd}) ${number}`;
+  if (number.length <= 8) return `(${ddd}) ${number.slice(0, 4)}-${number.slice(4)}`;
+  return `(${ddd}) ${number.slice(0, 5)}-${number.slice(5)}`;
+}
+
+function isValidBrazilPhone(value: string) {
+  const digits = brazilPhoneDigits(value);
+  return digits.length === 10 || digits.length === 11;
+}
+
+function normalizeBrazilPhone(value: string) {
+  const digits = brazilPhoneDigits(value);
+  return digits.length === 10 || digits.length === 11 ? `+55${digits}` : String(value || "").trim();
 }
 
 function isReceivable(item: SaleRecord) {
-  const type = saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod);
-  return !isPaidSale(item) && (type === "PAD" || type === "COD" || item.paymentStatus !== "paid");
+  return !isPaidSale(item) && operationCommissionForSale(item) > 0;
 }
 
 function formFromSaleRecord(item: SaleRecord): SaleForm {
   const saleType = saleTypeFromRecord(item);
   return {
     customerName: item.customerName,
-    customerPhone: item.customerPhone || "",
+    customerPhone: formatBrazilPhone(item.customerPhone || ""),
     city: item.city || "",
-    quantity: String(item.quantity || 1),
-    totalAmount: String(item.totalAmount || ""),
+    state: item.state || "",
+    legacyQuantity: item.quantity,
+    kitQuantity: item.kitQuantity == null ? "" : String(item.kitQuantity),
+    bottleQuantity: item.bottleQuantity == null ? "" : String(item.bottleQuantity),
+    totalAmount: formatMoneyInput(moneyToCents(item.totalAmount)),
+    totalAmountCents: moneyToCents(item.totalAmount) || 0,
+    operationCommissionAmount: item.operationCommissionAmount == null ? "" : formatMoneyInput(moneyToCents(item.operationCommissionAmount)),
+    operationCommissionAmountCents: moneyToCents(item.operationCommissionAmount) || 0,
+    operationCommissionPercent: item.operationCommissionPercent ?? null,
+    sellerId: item.sellerId ?? null,
     sellerName: item.sellerName,
-    commissionPercent: String(item.commissionRate || (isOwnerSeller(item.sellerName) ? 15 : 5)),
+    commissionPercent: String(item.commissionRate ?? 0),
     saleType,
     salePlatform: (item.salePlatform as SalesPlatformId) || "",
     paymentMethod: item.paymentMethod || (saleType === "advance" ? "PAGAMENTO ANTECIPADO" : saleType.toUpperCase()),
     saleDate: item.saleDate || String(item.createdAt || "").slice(0, 10) || todayKey(),
     saleTime: item.saleTime || (String(item.createdAt || "").includes("T") ? String(item.createdAt).slice(11, 16) : ""),
-    receivedDate: item.receivedDate || item.expectedPaymentDate || "",
+    receivedDate: item.receivedDate || "",
     paymentDate: item.paymentDate || (item.paymentStatus === "paid" ? item.expectedPaymentDate || item.saleDate || String(item.createdAt || "").slice(0, 10) : ""),
     paymentStatus: item.paymentStatus,
     deliveryType: item.deliveryType || (saleType === "pad" ? "PAD - Correios" : saleType === "cod" ? "COD - Motoboy" : "PAGAMENTO ANTECIPADO"),
@@ -430,10 +474,13 @@ function shouldShowOrderStatusBadge(status?: OrderStatus | string) {
 }
 
 export function SalesDashboardScreen() {
-  const { profile, isAdmin, isSeller } = useAuth();
+  const { profile, isLoading: isAuthLoading, isAdmin, isSeller } = useAuth();
+
   const [sales, setSales] = useState<SaleRecord[]>([]);
   const [cashWithdrawals, setCashWithdrawals] = useState<CashWithdrawal[]>([]);
-  const [sellers, setSellers] = useState<SellerProfile[]>(defaultSellers);
+  const [expensesTotal, setExpensesTotal] = useState(0);
+  const [expensesSetupRequired, setExpensesSetupRequired] = useState(false);
+  const [sellers, setSellers] = useState<SellerProfile[]>([]);
   const [sale, setSale] = useState<SaleForm>({ ...initialSaleForm, expectedPaymentDate: addBusinessDays(7) });
   const [dashboardDate, setDashboardDate] = useState(todayKey());
   const [periodMode, setPeriodMode] = useState<PeriodMode>("today");
@@ -445,10 +492,15 @@ export function SalesDashboardScreen() {
   const [cashTab, setCashTab] = useState<CashTab>("today");
   const [movementView, setMovementView] = useState<MovementView>("registered");
   const [isLoading, setIsLoading] = useState(true);
+  const [isSalesLoaded, setIsSalesLoaded] = useState(false);
+  const [isWithdrawalsLoaded, setIsWithdrawalsLoaded] = useState(false);
+  const [isExpensesLoading, setIsExpensesLoading] = useState(false);
+  const [isExpensesLoaded, setIsExpensesLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("create");
   const [editingSale, setEditingSale] = useState<SaleRecord | null>(null);
   const [isSaleDrawerOpen, setIsSaleDrawerOpen] = useState(false);
+  const [guaranteeDraft, setGuaranteeDraft] = useState<GuaranteeDraft>({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: false });
   const [deleteCandidate, setDeleteCandidate] = useState<SaleRecord | null>(null);
   const [isWithdrawalDrawerOpen, setIsWithdrawalDrawerOpen] = useState(false);
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>({ amount: "", withdrawnAt: todayKey(), note: "" });
@@ -462,27 +514,34 @@ export function SalesDashboardScreen() {
   const addNotification = useNotificationStore((state) => state.addNotification);
 
   useEffect(() => {
-    const loaded = loadSellers();
-    setSellers(loaded);
+    fetch("/api/sellers?active=true", { cache: "no-store", credentials: "include" })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "Erro ao carregar vendedores.");
+        setSellers(payload.sellers || []);
+      })
+      .catch((sellerError) => setError(sellerError instanceof Error ? sellerError.message : "Erro ao carregar vendedores."));
+  }, []);
+
+  useEffect(() => {
     if (isAdmin) {
-      const gabriel = loaded.find((seller) => seller.name === "Gabriel Moreira") ?? loaded[0];
-      if (gabriel) {
-        setSale((current) => ({ ...current, sellerName: gabriel.name, commissionPercent: String(gabriel.commissionPercent) }));
+      const owner = sellers.find((seller) => seller.isOwner) ?? sellers[0];
+      if (owner) {
+        setSale((current) => ({ ...current, sellerId: owner.id, sellerName: owner.name, commissionPercent: String(owner.isOwner ? 0 : owner.commissionPercent) }));
       }
     }
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, isSeller]);
+  }, [isAdmin, sellers]);
 
   useEffect(() => {
     if (!profile || !isSeller) return;
     setDashboardSeller(profile.sellerDisplayName);
     setSale((current) => ({
       ...current,
+      sellerId: sellers.find((seller) => seller.userId === profile.id)?.id ?? current.sellerId,
       sellerName: profile.sellerDisplayName,
       commissionPercent: String(profile.commissionPercent)
     }));
-  }, [profile, isSeller]);
+  }, [profile, isSeller, sellers]);
 
   useEffect(() => {
     if (!toast) return;
@@ -490,25 +549,64 @@ export function SalesDashboardScreen() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const saleTotal = useMemo(() => parseMoney(sale.totalAmount), [sale.totalAmount]);
+  const saleTotal = useMemo(() => moneyFromCents(sale.totalAmountCents), [sale.totalAmountCents]);
   const isSaleFormFinanciallyBlocked = useMemo(() => !getSaleFinancialState(sale).isValidSale, [sale]);
   const financialPreviewTotal = isSaleFormFinanciallyBlocked ? 0 : saleTotal;
   const commissionPercent = useMemo(() => normalizeCommissionPercent(sale.commissionPercent, 0), [sale.commissionPercent]);
   const sellerCommissionPreview = useMemo(() => Math.round(financialPreviewTotal * (commissionPercent / 100) * 100) / 100, [financialPreviewTotal, commissionPercent]);
+  const operationCommissionPercentPreview = useMemo(() => {
+    if (sale.operationCommissionAmount.trim() && sale.totalAmountCents > 0) {
+      return Math.round((sale.operationCommissionAmountCents / sale.totalAmountCents) * 100 * 100) / 100;
+    }
+    if (sale.operationCommissionPercent != null && Number.isFinite(sale.operationCommissionPercent)) {
+      return Math.round(sale.operationCommissionPercent * 100) / 100;
+    }
+    return null;
+  }, [sale.operationCommissionAmount, sale.operationCommissionAmountCents, sale.operationCommissionPercent, sale.totalAmountCents]);
   const ownerCommissionPreview = useMemo(() => {
-    if (isOwnerSeller(sale.sellerName)) return sellerCommissionPreview;
-
-    // Venda feita por vendedora: a comissão dela sai de dentro dos 15% da operação.
-    // Ex.: venda R$ 997,00 com comissão da vendedora em 7,5%:
-    // operação 15% = R$ 149,55; subcomissão = R$ 74,77; minha comissão = R$ 74,78.
-    const operationTotal = Math.round(financialPreviewTotal * (ownerCommissionPercent / 100) * 100) / 100;
-    return Math.round(Math.max(0, operationTotal - sellerCommissionPreview) * 100) / 100;
-  }, [sale.sellerName, financialPreviewTotal, sellerCommissionPreview]);
+    if (isSaleFormFinanciallyBlocked) return 0;
+    if (sale.operationCommissionAmount.trim()) return moneyFromCents(sale.operationCommissionAmountCents);
+    if (sale.operationCommissionPercent != null && Number.isFinite(sale.operationCommissionPercent)) return Math.round(financialPreviewTotal * (sale.operationCommissionPercent / 100) * 100) / 100;
+    return 0;
+  }, [financialPreviewTotal, isSaleFormFinanciallyBlocked, sale.operationCommissionAmount, sale.operationCommissionAmountCents, sale.operationCommissionPercent]);
 
   const sellersForFilter = useMemo(() => Array.from(new Set([...sellers.map((seller) => seller.name), ...sales.map((item) => item.sellerName).filter(Boolean)])).sort(), [sales, sellers]);
 
   const activePeriod = useMemo(() => periodRange(periodMode, dashboardDate, customStartDate, customEndDate), [periodMode, dashboardDate, customStartDate, customEndDate]);
   const activePeriodLabel = useMemo(() => periodLabel(periodMode, activePeriod.start, activePeriod.end), [periodMode, activePeriod.start, activePeriod.end]);
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+    if (!isAdmin) {
+      setExpensesTotal(0);
+      setExpensesSetupRequired(false);
+      setIsExpensesLoaded(true);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsExpensesLoading(true);
+    setIsExpensesLoaded(false);
+    const params = new URLSearchParams({ start: activePeriod.start, end: activePeriod.end });
+    fetch(`/api/expenses?${params}`, { cache: "no-store", credentials: "include", signal: controller.signal })
+      .then(async (response) => {
+        const text = await response.text();
+        const payload = text ? JSON.parse(text) : {};
+        if (!response.ok) throw new Error(payload?.error || "Erro ao carregar despesas.");
+        setExpensesTotal(Number(payload.total || 0));
+        setExpensesSetupRequired(Boolean(payload.setupRequired));
+        setIsExpensesLoaded(true);
+      })
+      .catch((expenseError) => {
+        if (expenseError instanceof DOMException && expenseError.name === "AbortError") return;
+        setExpensesTotal(0);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsExpensesLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [activePeriod.end, activePeriod.start, isAdmin, isAuthLoading]);
 
   const registeredMovementRows = useMemo(() => {
     return sales.filter((item) => {
@@ -522,15 +620,11 @@ export function SalesDashboardScreen() {
   }, [sales, activePeriod.start, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
 
   const filteredByDate = useMemo(() => {
-    // Base financeira: somente vendas válidas entram em faturamento, comissão, caixa, ranking e metas.
-    // Cancelado/Devolvido/Perdido continuam visíveis no movimento, mas saem dos totais.
     return registeredMovementRows.filter((item) => getSaleFinancialState(item).countsRevenue);
   }, [registeredMovementRows]);
 
   const confirmedCashRows = useMemo(() => {
     return sales.filter((item) => {
-      // Vendas canceladas/devolvidas/perdidas continuam visíveis em Movimento do dia,
-      // mas NUNCA entram na visão Caixa nem nos totais financeiros.
       if (!getSaleFinancialState(item).countsCash) return false;
       const cashDate = cashDateForSale(item);
       if (!isDateInRange(cashDate, activePeriod.start, activePeriod.end)) return false;
@@ -581,17 +675,25 @@ export function SalesDashboardScreen() {
     }).sort((a, b) => String(a.expectedPaymentDate).localeCompare(String(b.expectedPaymentDate)));
   }, [sales, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
 
-  const activeWithdrawals = useMemo(() => {
-    return cashWithdrawals
-      .filter((item) => isDateInRange(item.withdrawnAt, activePeriod.start, activePeriod.end))
-      .sort((a, b) => String(b.withdrawnAt || "").localeCompare(String(a.withdrawnAt || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  }, [cashWithdrawals, activePeriod.start, activePeriod.end]);
+  const allWithdrawals = useMemo(() => {
+    return [...cashWithdrawals].sort(
+      (a, b) =>
+        String(b.withdrawnAt || "").localeCompare(String(a.withdrawnAt || "")) ||
+        String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
+    );
+  }, [cashWithdrawals]);
+
+  const periodWithdrawals = useMemo(() => {
+    return allWithdrawals.filter((item) =>
+      isDateInRange(item.withdrawnAt, activePeriod.start, activePeriod.end)
+    );
+  }, [allWithdrawals, activePeriod.start, activePeriod.end]);
 
   const withdrawnSaleIds = useMemo(() => {
     const ids = new Set<string>();
-    cashWithdrawals.forEach((withdrawal) => (withdrawal.saleIds || []).forEach((id) => ids.add(id)));
+    allWithdrawals.forEach((withdrawal) => (withdrawal.saleIds || []).forEach((id) => ids.add(id)));
     return ids;
-  }, [cashWithdrawals]);
+  }, [allWithdrawals]);
 
   const allConfirmedCashRowsForWithdrawal = useMemo(() => {
     return sales
@@ -631,9 +733,19 @@ export function SalesDashboardScreen() {
     return (selectedWithdrawal.saleIds || []).filter((id) => !withdrawalSalesById.has(id)).length;
   }, [selectedWithdrawal, withdrawalSalesById]);
 
+  const allCashHistorySales = useMemo(() => {
+    return sales.filter((item) => {
+      if (!getSaleFinancialState(item).countsCash) return false;
+      if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
+      if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
+      if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
+      return true;
+    });
+  }, [sales, dashboardSeller, dashboardType, dashboardPlatform]);
+
   const cashMovementRows = useMemo(() => {
     const rows: CashMovementRow[] = [];
-    confirmedCashRows.forEach((sale) => {
+    allCashHistorySales.forEach((sale) => {
       const movementType = saleTypeLabel(sale.deliveryType, sale.paymentStatus as PaymentStatus, sale.paymentMethod);
       rows.push({
         id: `cash-${sale.id}`,
@@ -642,14 +754,16 @@ export function SalesDashboardScreen() {
         description: sale.customerName,
         order: saleOrderNumber(sale),
         movement: movementType === "ANTECIPADO" ? "Pagamento antecipado" : `Entrada no caixa · ${movementType}`,
+        // A entrada usa o valor líquido exato da operação; o percentual legado é apenas fallback.
         amount: isAdmin ? ownerWalletValueForSale(sale) : subCommissionForSale(sale),
+        // A comissão da vendedora permanece separada para repasse.
         fee: isAdmin ? subCommissionForSale(sale) : 0,
-        net: isAdmin ? ownerCommissionForSale(sale) : subCommissionForSale(sale),
+        net: isAdmin ? operationCashValueForSale(sale) : subCommissionForSale(sale),
         status: withdrawnSaleIds.has(sale.id) ? "Sacada" : "Disponível",
         sale
       });
     });
-    const withdrawalsInSequence = [...activeWithdrawals].sort((a, b) => {
+    const withdrawalsInSequence = [...allWithdrawals].sort((a, b) => {
       const aTime = new Date(a.createdAt || a.withdrawnAt || "").getTime();
       const bTime = new Date(b.createdAt || b.withdrawnAt || "").getTime();
       return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
@@ -678,21 +792,50 @@ export function SalesDashboardScreen() {
       if (a.kind !== b.kind) return a.kind === "withdrawal" ? -1 : 1;
       return a.id.localeCompare(b.id);
     });
-  }, [activeWithdrawals, confirmedCashRows, isAdmin, withdrawalSalesById, withdrawnSaleIds]);
+  }, [allCashHistorySales, allWithdrawals, isAdmin, withdrawalSalesById, withdrawnSaleIds]);
 
   const summary = useMemo(() => {
     const revenue = filteredByDate.reduce((sum, item) => sum + item.totalAmount, 0);
     const sellerCommission = filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
     const teamSellerCommission = filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const operationCommission = isAdmin ? filteredByDate.reduce((sum, item) => sum + ownerCommissionForSale(item), 0) : sellerCommission;
-    const totalCommission = isAdmin ? operationCommission + teamSellerCommission : sellerCommission;
-    const ownerPotential = isAdmin ? filteredByDate.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const ownerCommission = isAdmin ? confirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0) : confirmedCashRows.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const receivableTodayRevenue = isAdmin ? receivableToday.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : receivableToday.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const futureReceivableRevenue = isAdmin ? futureReceivables.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0) : futureReceivables.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-    const cashWithdrawn = activeWithdrawals.reduce((sum, item) => sum + item.amount, 0);
-    const cashBalance = Math.max(0, ownerCommission - cashWithdrawn);
+
+    const operationCommission = isAdmin
+      ? filteredByDate.reduce((sum, item) => sum + ownerCommissionForSale(item), 0)
+      : sellerCommission;
+
+    const totalCommission = isAdmin ? operationCommission : sellerCommission;
+
+    const ownerPotential = isAdmin
+      ? filteredByDate.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0)
+      : filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+
+    const ownerCommission = isAdmin
+      ? confirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0)
+      : confirmedCashRows.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+
+    const receivableTodayRevenue = isAdmin
+      ? receivableToday.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0)
+      : receivableToday.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+
+    const futureReceivableRevenue = isAdmin
+      ? futureReceivables.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0)
+      : futureReceivables.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+
+    const cashWithdrawn = periodWithdrawals.reduce((sum, item) => sum + item.amount, 0);
+
+    // REGRA CORRETA DO CARD CAIXA:
+    // Mostrar somente entradas reais no caixa dentro do período selecionado
+    // que ainda NÃO foram sacadas.
+    // Não subtrair todos os saques do período, porque um saque pode ter sido feito
+    // usando saldo antigo de outro período.
+    const periodAvailableCash = confirmedCashRows
+      .filter((item) => !withdrawnSaleIds.has(item.id))
+      .reduce((sum, item) => {
+        return sum + (isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item));
+      }, 0);
+
     const yesterdayRevenue = yesterdaySales.reduce((sum, item) => sum + item.totalAmount, 0);
+
     return {
       revenue,
       sellerCommission,
@@ -701,11 +844,11 @@ export function SalesDashboardScreen() {
       totalCommission,
       ownerCommission,
       cashWithdrawn,
-      cashBalance,
+      cashBalance: periodAvailableCash,
       salesCount: filteredByDate.length,
       averageTicket: filteredByDate.length ? revenue / filteredByDate.length : 0,
       ownerPotential,
-      programmedCash: cashBalance,
+      programmedCash: periodAvailableCash,
       receivableTodayCount: receivableToday.length,
       receivableTodayRevenue,
       futureReceivableCount: futureReceivables.length,
@@ -713,35 +856,60 @@ export function SalesDashboardScreen() {
       yesterdayRevenue,
       yesterdayCount: yesterdaySales.length
     };
-  }, [activeWithdrawals, confirmedCashRows, filteredByDate, futureReceivables, isAdmin, receivableToday, yesterdaySales]);
+  }, [
+    periodWithdrawals,
+    confirmedCashRows,
+    filteredByDate,
+    futureReceivables,
+    isAdmin,
+    receivableToday,
+    withdrawnSaleIds,
+    yesterdaySales
+  ]);
 
-  async function refresh() {
+  const refresh = useCallback(async (force = true) => {
     setIsLoading(true);
     try {
-      const salesResponse = await fetch(`/api/sales?t=${Date.now()}`, { cache: "no-store", credentials: "include" });
-      const payload = await salesResponse.json();
-      if (!salesResponse.ok) throw new Error(payload?.error || "Erro ao carregar vendas.");
-      setSales((payload.sales ?? []) as SaleRecord[]);
-
-      if (isAdmin || isSeller) {
-        const withdrawalsResponse = await fetch(`/api/cash-withdrawals?t=${Date.now()}`, { cache: "no-store", credentials: "include" });
-        const withdrawalsPayload = await withdrawalsResponse.json().catch(() => ({}));
-        if (!withdrawalsResponse.ok) throw new Error(withdrawalsPayload?.error || "Erro ao carregar saques.");
-        setCashWithdrawals((withdrawalsPayload.withdrawals ?? []) as CashWithdrawal[]);
-      } else {
-        setCashWithdrawals([]);
+      const result = await loadCoreSalesData(force);
+      if (result.sales) {
+        setSales(result.sales);
+        setIsSalesLoaded(true);
       }
-      setError(null);
-      setLastUpdatedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao carregar vendas.");
+      if (result.withdrawals) {
+        setCashWithdrawals(result.withdrawals);
+        setIsWithdrawalsLoaded(true);
+      }
+      setError(result.errors.length ? result.errors.join(" ") : null);
+      if (!result.errors.length) setLastUpdatedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
     } finally {
       setIsLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    refresh(false);
+  }, [refresh]);
 
   function updateSale<K extends keyof SaleForm>(field: K, value: SaleForm[K]) {
     setSale((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateTotalAmount(value: string) {
+    const cents = moneyToCents(value);
+    setSale((current) => ({ ...current, totalAmount: value, totalAmountCents: cents ?? 0 }));
+  }
+
+  function updateOperationCommissionAmount(value: string) {
+    const cents = moneyToCents(value);
+    setSale((current) => ({ ...current, operationCommissionAmount: value, operationCommissionAmountCents: cents ?? 0 }));
+  }
+
+  function normalizeMoneyFields() {
+    setSale((current) => ({
+      ...current,
+      totalAmount: current.totalAmount.trim() ? formatMoneyInput(current.totalAmountCents) : "",
+      operationCommissionAmount: current.operationCommissionAmount.trim() ? formatMoneyInput(current.operationCommissionAmountCents) : ""
+    }));
   }
 
   function updateSaleDate(value: string) {
@@ -750,8 +918,6 @@ export function SalesDashboardScreen() {
       if (current.saleType === "pad") next.expectedPaymentDate = addBusinessDaysFromKey(value || todayKey(), 7);
       if (current.saleType === "advance") {
         next.expectedPaymentDate = value || todayKey();
-        next.receivedDate = value || todayKey();
-        next.paymentDate = current.paymentDate || value || todayKey();
       }
       return next;
     });
@@ -763,29 +929,41 @@ export function SalesDashboardScreen() {
     } else if (type === "cod") {
       setSale((current) => ({ ...current, saleType: type, paymentStatus: "cod", paymentMethod: "COD", deliveryType: "COD - Motoboy", deliveryStatus: "scheduled", expectedPaymentDate: current.expectedPaymentDate || "", receivedDate: current.receivedDate || "", paymentDate: current.paymentDate || "" }));
     } else {
-      setSale((current) => ({ ...current, saleType: type, paymentStatus: "paid", paymentMethod: "PAGAMENTO ANTECIPADO", deliveryType: "PAGAMENTO ANTECIPADO", deliveryStatus: "delivered", expectedPaymentDate: current.saleDate || todayKey(), receivedDate: current.receivedDate || current.saleDate || todayKey(), paymentDate: current.paymentDate || current.saleDate || todayKey() }));
+      setSale((current) => ({ ...current, saleType: type, paymentStatus: current.paymentStatus === "paid" ? "paid" : "pending", paymentMethod: "PAGAMENTO ANTECIPADO", deliveryType: "PAGAMENTO ANTECIPADO", expectedPaymentDate: current.saleDate || todayKey(), receivedDate: current.receivedDate || "", paymentDate: current.paymentStatus === "paid" ? (current.paymentDate || current.saleDate || todayKey()) : "" }));
     }
   }
 
   function selectPlatform(platformId: SalesPlatformId) {
     const platform = getSalesPlatform(platformId);
     if (!platform) return;
-    setSale((current) => ({
-      ...current,
-      salePlatform: platformId
-    }));
+    setSale((current) => ({ ...current, salePlatform: platformId }));
   }
 
-  function selectSellerByName(name: string) {
-    const seller = sellers.find((item) => item.name === name);
-    setSale((current) => ({ ...current, sellerName: name, commissionPercent: seller ? String(seller.commissionPercent) : current.commissionPercent }));
+  function selectSellerById(id: string) {
+    const seller = sellers.find((item) => item.id === id);
+    if (!seller) return;
+    setSale((current) => ({ ...current, sellerId: seller.id, sellerName: seller.name, commissionPercent: String(seller.isOwner ? 0 : seller.commissionPercent) }));
+  }
+
+  async function loadGuaranteeDraft(saleId?: string) {
+    if (!isAdmin) return;
+    try {
+      const response = await fetch(`/api/guarantees${saleId ? `?saleId=${saleId}` : ""}`, { cache: "no-store", credentials: "include" });
+      const payload = await response.json();
+      const existing = payload.guarantees?.[0];
+      const activeSetting = payload.settings?.find((item: { platform: string; paymentMode: string; isActive: boolean }) => item.platform.toLowerCase() === "coinzz" && item.paymentMode.toUpperCase() === "PAD" && item.isActive);
+      setGuaranteeDraft({ guaranteeType: existing?.guaranteeType || "conditional", guaranteeAmount: String(existing?.guaranteeAmount || activeSetting?.defaultAmount || ""), paid: existing?.status === "paid", setupRequired: Boolean(payload.setupRequired) });
+    } catch {
+      setGuaranteeDraft({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: true });
+    }
   }
 
   function openCreateDrawer() {
     setEditingSale(null);
     setDrawerMode("create");
-    setSale((current) => ({ ...initialSaleForm, sellerName: current.sellerName, commissionPercent: current.commissionPercent, saleDate: activePeriod.end, saleTime: new Date().toTimeString().slice(0, 5), expectedPaymentDate: addBusinessDaysFromKey(activePeriod.end, 7), receivedDate: "", paymentDate: "", salePlatform: "" }));
+    setSale((current) => ({ ...initialSaleForm, sellerId: current.sellerId, sellerName: current.sellerName, commissionPercent: current.commissionPercent, saleDate: activePeriod.end, saleTime: new Date().toTimeString().slice(0, 5), expectedPaymentDate: addBusinessDaysFromKey(activePeriod.end, 7), receivedDate: "", paymentDate: "", salePlatform: "" }));
     setIsSaleDrawerOpen(true);
+    void loadGuaranteeDraft();
   }
 
   function openEditDrawer(item: SaleRecord) {
@@ -793,6 +971,7 @@ export function SalesDashboardScreen() {
     setDrawerMode("edit");
     setSale(formFromSaleRecord(item));
     setIsSaleDrawerOpen(true);
+    void loadGuaranteeDraft(item.id);
   }
 
   function closeDrawer() {
@@ -802,18 +981,29 @@ export function SalesDashboardScreen() {
   }
 
   function salePayload(): SaleInput {
-    const quantity = Number(sale.quantity || 1);
+    const kitQuantity = editingSale ? (editingSale.kitQuantity ?? null) : 1;
+    const bottleQuantity = sale.bottleQuantity ? Number(sale.bottleQuantity) : null;
+    const exactOperationCommission = sale.operationCommissionAmount.trim() ? moneyFromCents(sale.operationCommissionAmountCents) : null;
+    const exactOperationCommissionPercent = exactOperationCommission !== null && sale.totalAmountCents > 0
+      ? Math.round((sale.operationCommissionAmountCents / sale.totalAmountCents) * 100 * 10000) / 10000
+      : (sale.operationCommissionPercent ?? null);
     return {
       customerName: sale.customerName,
-      customerPhone: sale.customerPhone,
-      city: sale.city,
+      customerPhone: normalizeBrazilPhone(sale.customerPhone || ""),
+      city: editingSale?.city && !sale.city.trim() ? editingSale.city : (sale.city.trim() || "Não informada"),
+      state: sale.state || undefined,
       productName: "Produto",
       saleDate: sale.saleDate || dashboardDate,
-      quantity,
+      quantity: editingSale?.quantity ?? bottleQuantity ?? kitQuantity ?? 1,
+      kitQuantity,
+      bottleQuantity,
       totalAmount: saleTotal,
+      operationCommissionAmount: exactOperationCommission,
+      operationCommissionPercent: exactOperationCommissionPercent,
       sellerName: sale.sellerName,
+      sellerId: sale.sellerId || undefined,
       salePlatform: sale.salePlatform || undefined,
-      commissionRate: commissionPercentToRate(commissionPercent || 5),
+      commissionRate: commissionPercentToRate(commissionPercent),
       paymentMethod: sale.paymentMethod,
       paymentStatus: sale.paymentStatus,
       deliveryType: sale.deliveryType,
@@ -823,7 +1013,7 @@ export function SalesDashboardScreen() {
       orderStatusNote: sale.orderStatusNote || undefined,
       expectedPaymentDate: sale.expectedPaymentDate || undefined,
       receivedDate: sale.receivedDate || undefined,
-      paymentDate: sale.paymentStatus === "paid" || sale.saleType === "advance" ? (sale.paymentDate || todayKey()) : (sale.paymentDate || undefined),
+      paymentDate: sale.paymentStatus === "paid" ? (sale.paymentDate || todayKey()) : (sale.paymentDate || undefined),
       saleTime: sale.saleTime || undefined,
       notes: sale.notes
     };
@@ -847,6 +1037,27 @@ export function SalesDashboardScreen() {
       const result = await response.json();
       if (!response.ok) throw new Error(result?.error || (isEditing ? "Não foi possível atualizar a venda." : "Não foi possível lançar a venda."));
 
+      const savedSale = result.sale as SaleRecord;
+      const requiresCoinzzGuarantee = isAdmin && sale.salePlatform === "coinzz" && sale.saleType === "pad";
+      if (requiresCoinzzGuarantee) {
+        let guaranteeError = guaranteeDraft.setupRequired ? "A migration 024 ainda precisa ser aplicada para salvar a garantia escolhida." : "";
+        if (!guaranteeError) {
+          const guaranteeResponse = await fetch("/api/guarantees", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ saleId: savedSale.id, guaranteeType: guaranteeDraft.guaranteeType, guaranteeAmount: parseMoney(guaranteeDraft.guaranteeAmount), isActive: true }) });
+          const guaranteePayload = await guaranteeResponse.json().catch(() => ({}));
+          if (!guaranteeResponse.ok) guaranteeError = guaranteePayload?.error || "A garantia escolhida não pôde ser sincronizada.";
+        }
+        if (guaranteeError) {
+          setEditingSale(savedSale);
+          setDrawerMode("edit");
+          setSales((current) => current.some((item) => item.id === savedSale.id) ? current.map((item) => item.id === savedSale.id ? savedSale : item) : [savedSale, ...current]);
+          const retryMessage = `A venda foi salva, mas a garantia não foi confirmada: ${guaranteeError} Use “Salvar alterações” para tentar novamente sem duplicar a venda.`;
+          setError(retryMessage);
+          setToast({ title: "Garantia pendente", message: retryMessage, tone: "danger" });
+          await refresh();
+          return;
+        }
+      }
+
       if (isEditing) {
         const updated = result.sale as SaleRecord;
         setSales((current) => current.map((item) => item.id === updated.id ? updated : item));
@@ -855,7 +1066,7 @@ export function SalesDashboardScreen() {
         const created = result.sale as SaleRecord;
         const ownerShare = ownerCommissionForSale(created);
         const operationCash = ownerWalletValueForSale(created);
-        const notificationMessage = isOwnerSeller(created.sellerName)
+        const notificationMessage = Number(created.commissionAmount || 0) === 0
           ? `Venda lançada: ${brl(created.totalAmount)} · minha comissão ${brl(ownerShare)} · caixa ${brl(operationCash)}.`
           : `Venda lançada: ${brl(created.totalAmount)} · minha comissão ${brl(ownerShare)} · subcomissão ${brl(subCommissionForSale(created))} · caixa ${brl(operationCash)}.`;
         setToast({ title: "Pedido gerado", message: notificationMessage, tone: "money" });
@@ -963,9 +1174,14 @@ export function SalesDashboardScreen() {
     setError(null);
     setToast(null);
     try {
+      const withdrawnAt = withdrawalForm.withdrawnAt || todayKey();
+      const eligibleRows = availableCashRowsForWithdrawal.filter((cashSale) => {
+        const cd = cashDateForSale(cashSale);
+        return cd ? cd <= withdrawnAt : false;
+      });
       let remaining = amount;
       const selectedSaleIds: string[] = [];
-      for (const cashSale of availableCashRowsForWithdrawal) {
+      for (const cashSale of eligibleRows) {
         if (remaining <= 0) break;
         selectedSaleIds.push(cashSale.id);
         remaining -= isAdmin ? ownerWalletValueForSale(cashSale) : subCommissionForSale(cashSale);
@@ -1016,7 +1232,7 @@ export function SalesDashboardScreen() {
               <Field label="Período"><select className={inputClass} value={periodMode} onChange={(e) => setPeriodMode(e.target.value as PeriodMode)}><option value="today">Hoje</option><option value="3d">Últimos 3 dias</option><option value="7d">Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="custom">Personalizado</option></select></Field>
               {periodMode === "custom" ? <Field label="De"><input className={inputClass} type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value || todayKey())} /></Field> : <Field label="Até"><input className={inputClass} type="date" value={dashboardDate} onChange={(e) => setDashboardDate(e.target.value || todayKey())} /></Field>}
               {periodMode === "custom" ? <Field label="Até"><input className={inputClass} type="date" value={customEndDate} onChange={(e) => { const value = e.target.value || todayKey(); setCustomEndDate(value); setDashboardDate(value); }} /></Field> : null}
-              {isAdmin ? <Field label="Vendedor"><select className={inputClass} value={dashboardSeller} onChange={(e) => setDashboardSeller(e.target.value)}><option value="all">Todos</option>{sellersForFilter.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></Field> : <Field label="Vendedor"><input className={inputClass} value={profile?.sellerDisplayName || ""} readOnly /></Field>}
+               {isAdmin ? <Field label="Vendedor"><select className={inputClass} value={dashboardSeller} onChange={(e) => setDashboardSeller(e.target.value)}><option value="all">Todos</option>{sellersForFilter.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></Field> : <Field label="Vendedor"><input className={inputClass} value={profile?.sellerDisplayName || ""} placeholder={isAuthLoading ? "Identificando vendedor..." : ""} readOnly /></Field>}
               <Field label="Pagamento"><select className={inputClass} value={dashboardType} onChange={(e) => setDashboardType(e.target.value)}><option value="all">Todos</option><option value="PAD">PAD</option><option value="COD">COD</option><option value="ANTECIPADO">Antecipado</option></select></Field>
               <Field label="Plataforma"><select className={inputClass} value={dashboardPlatform} onChange={(e) => setDashboardPlatform(e.target.value)}><option value="all">Todas</option>{salesPlatforms.map((platform) => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select></Field>
             </div>
@@ -1040,14 +1256,15 @@ export function SalesDashboardScreen() {
 
       {error ? <div className="rounded-2xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm font-bold text-danger">{error}</div> : null}
 
-      <section className="grid gap-4 xl:grid-cols-4">
-        <CommandCard title="Hoje" value={brl(summary.revenue)} subtext={plural(summary.salesCount, "venda registrada", "vendas registradas")} helper={`Média ${brl(summary.averageTicket)}`} comparison={revenueComparison} tone="money" icon={<BarChart3 size={21} />} featured />
-        <CommandCard title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
-        <CommandCard title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} />
-        <CommandCard title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={activeWithdrawals.length ? `${activeWithdrawals.length} saque${activeWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque registrado"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin || isSeller ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
+      <section className={cn("grid gap-4", isAdmin ? "xl:grid-cols-5" : "xl:grid-cols-4")}>
+        <CommandCard loading={!isSalesLoaded} title="Hoje" value={brl(summary.revenue)} subtext={plural(summary.salesCount, "venda registrada", "vendas registradas")} helper={`Média ${brl(summary.averageTicket)}`} comparison={revenueComparison} tone="money" icon={<BarChart3 size={21} />} featured />
+        <CommandCard loading={!isSalesLoaded} title="Operação" value={brl(summary.totalCommission)} subtext="comissão total no período" helper={`Minha comissão ${brl(summary.operationCommission)}`} comparison={summary.salesCount ? (isAdmin ? `A pagar para vendedores ${brl(summary.teamSellerCommission)}` : "Suas vendas no período") : "Aguardando lançamentos"} tone="cyan" icon={<Activity size={21} />} />
+        <CommandCard loading={!isSalesLoaded || !isWithdrawalsLoaded} title="Caixa" value={brl(summary.programmedCash)} subtext="saldo disponível" helper={`Entrou ${brl(summary.ownerCommission)}`} comparison={summary.cashWithdrawn ? `Saldo depois dos saques do período` : (summary.futureReceivableCount ? `${brl(summary.futureReceivableRevenue)} pendente nos próximos dias` : "Sem próximos recebimentos")} tone="purple" icon={<WalletCards size={21} />} />
+        <CommandCard loading={!isSalesLoaded || !isWithdrawalsLoaded} title="Saques" value={brl(summary.cashWithdrawn)} subtext="retirado do caixa" helper={periodWithdrawals.length ? `${periodWithdrawals.length} saque${periodWithdrawals.length === 1 ? "" : "s"} no período` : "Nenhum saque no período"} comparison={summary.programmedCash ? `Ainda disponível ${brl(summary.programmedCash)}` : "Caixa zerado após retiradas"} tone="amber" icon={<WalletCards size={21} />} action={isAdmin || isSeller ? <button type="button" onClick={openWithdrawalDrawer} className="rounded-xl border border-amber/30 bg-amber px-3 py-2 text-xs font-black text-[#160c02] shadow-[0_0_28px_rgba(245,158,11,.18)] transition duration-[180ms] ease-out hover:bg-[#ffb82e]">Registrar saque</button> : undefined} />
+        {isAdmin ? <CommandCard loading={isExpensesLoading || !isExpensesLoaded} title="Despesas" value={brl(expensesTotal)} subtext="gasto no período" helper={expensesSetupRequired ? "Migration 022 pendente" : "Despesas reais registradas"} comparison={expensesSetupRequired ? "Configure o módulo Financeiro" : activePeriodLabel} tone="danger" icon={<ReceiptText size={21} />} /> : null}
       </section>
 
-      <CashMovementHistory rows={cashMovementRows} />
+      <CashMovementHistory loading={!isSalesLoaded || !isWithdrawalsLoaded} rows={cashMovementRows} activeStart={activePeriod.start} activeEnd={activePeriod.end} />
 
       <section className="grid items-start gap-5 2xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]">
         <PremiumPanel glow="cyan" className="self-start">
@@ -1061,41 +1278,40 @@ export function SalesDashboardScreen() {
                   <ViewToggleButton active={movementView === "registered"} onClick={() => setMovementView("registered")}>Vendas</ViewToggleButton>
                   <ViewToggleButton active={movementView === "cash"} onClick={() => setMovementView("cash")}>Caixa</ViewToggleButton>
                 </div>
-                <span className="rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-black text-white/65">{movementAction}</span>
+                <span className="rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-black text-white/65">{!isSalesLoaded || (movementView === "cash" && !isWithdrawalsLoaded) ? "Carregando dados" : movementAction}</span>
               </div>
             }
           />
-          <MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />
-          <MovementFooter items={movementItems} view={movementView} isAdmin={isAdmin} />
+          {!isSalesLoaded || (movementView === "cash" && !isWithdrawalsLoaded) ? <PanelLoading /> : <><MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} /><MovementFooter items={movementItems} view={movementView} isAdmin={isAdmin} /></>}
         </PremiumPanel>
 
         <PremiumPanel glow="purple">
           <PanelHeader icon={<Clock3 size={18} />} title="Caixa previsto" description="Carteira prevista. Só entra no caixa quando você marcar como pago." action={<button type="button" onClick={() => setCashTab("future")} className="rounded-xl border border-purple/25 bg-purple/10 px-3 py-2 text-xs font-semibold text-purple transition duration-[180ms] ease-out hover:bg-purple/15 hover:text-white">Ver próximos dias</button>} />
-          <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/18 p-1.5"><TabButton active={cashTab === "today"} onClick={() => setCashTab("today")}>Período</TabButton><TabButton active={cashTab === "future"} onClick={() => setCashTab("future")}>Próximos dias</TabButton></div>
+          {!isSalesLoaded || !isWithdrawalsLoaded ? <PanelLoading /> : <><div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/18 p-1.5"><TabButton active={cashTab === "today"} onClick={() => setCashTab("today")}>Período</TabButton><TabButton active={cashTab === "future"} onClick={() => setCashTab("future")}>Próximos dias</TabButton></div>
           <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />}</div>
-          {activeWithdrawals.length ? <WithdrawalList withdrawals={activeWithdrawals.slice(0, 5)} onOpen={openWithdrawalDetails} /> : null}
+          {allWithdrawals.length ? <WithdrawalList withdrawals={allWithdrawals.slice(0, 5)} onOpen={openWithdrawalDetails} /> : null}
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Total {cashTab === "today" ? "no período" : "próximos dias"}</p><p className="mt-2 text-3xl font-black text-white">{brl(activeCashTotal)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor que entra na carteira ao confirmar pagamento</p></div>
             <div className="rounded-2xl border border-amber/20 bg-amber/10 p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Saques no período</p><p className="mt-2 text-3xl font-black text-amber">{brl(summary.cashWithdrawn)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor retirado do caixa</p></div>
-          </div>
+          </div></>}
         </PremiumPanel>
       </section>
 
       <PremiumPanel glow="none" className="p-5">
         <PanelHeader icon={<ArrowUpRight size={18} />} title="Resumo da operação" description={`Visão rápida do que aconteceu em ${activePeriodLabel}.`} />
-        <div className="mt-4 grid gap-3 md:grid-cols-3"><MiniIndicator label="Vendas registradas" value={String(summary.salesCount)} tone="cyan" /><MiniIndicator label="Minha comissão" value={brl(summary.operationCommission)} tone="purple" /><MiniIndicator label="Saldo no caixa" value={brl(summary.programmedCash)} tone="money" /></div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3"><MiniIndicator loading={!isSalesLoaded} label="Vendas registradas" value={String(summary.salesCount)} tone="cyan" /><MiniIndicator loading={!isSalesLoaded} label="Minha comissão" value={brl(summary.operationCommission)} tone="purple" /><MiniIndicator loading={!isSalesLoaded || !isWithdrawalsLoaded} label="Saldo no caixa" value={brl(summary.programmedCash)} tone="money" /></div>
       </PremiumPanel>
 
       {isSaleDrawerOpen ? (
         <SaleDrawer onClose={closeDrawer}>
-          <SaleFormPanel mode={drawerMode} sale={sale} sellers={sellers} lockSeller={isSeller} saleTotal={financialPreviewTotal} rawSaleTotal={saleTotal} sellerCommissionPreview={sellerCommissionPreview} ownerCommissionPreview={ownerCommissionPreview} isSaving={isSaving} onSubmit={submitSale} onUpdate={updateSale} onSaleDateChange={updateSaleDate} onTypeChange={updateSaleType} onPlatformChange={selectPlatform} onSellerChange={selectSellerByName} />
+          <SaleFormPanel mode={drawerMode} sale={sale} sellers={sellers} lockSeller={isSeller} saleTotal={financialPreviewTotal} rawSaleTotal={saleTotal} sellerCommissionPreview={sellerCommissionPreview} ownerCommissionPreview={ownerCommissionPreview} operationCommissionPercentPreview={operationCommissionPercentPreview} isSaving={isSaving} onSubmit={submitSale} onUpdate={updateSale} onTotalAmountChange={updateTotalAmount} onOperationCommissionAmountChange={updateOperationCommissionAmount} onMoneyBlur={normalizeMoneyFields} onSaleDateChange={updateSaleDate} onTypeChange={updateSaleType} onPlatformChange={selectPlatform} onSellerChange={selectSellerById} guaranteeDraft={guaranteeDraft} onGuaranteeChange={setGuaranteeDraft} showGuarantee={isAdmin && sale.salePlatform === "coinzz" && sale.saleType === "pad"} />
         </SaleDrawer>
       ) : null}
 
       {isWithdrawalDrawerOpen ? (
         <WithdrawalDrawer
           form={withdrawalForm}
-          balance={summary.programmedCash}
+          balance={availableCashTotalForWithdrawal}
           cashRows={availableCashRowsForWithdrawal}
           isAdmin={isAdmin}
           isSaving={isWithdrawalSaving}
@@ -1124,7 +1340,7 @@ export function SalesDashboardScreen() {
   );
 }
 
-function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, rawSaleTotal, sellerCommissionPreview, ownerCommissionPreview, isSaving, onSubmit, onUpdate, onSaleDateChange, onTypeChange, onPlatformChange, onSellerChange }: {
+function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, rawSaleTotal, sellerCommissionPreview, ownerCommissionPreview, operationCommissionPercentPreview, isSaving, onSubmit, onUpdate, onTotalAmountChange, onOperationCommissionAmountChange, onMoneyBlur, onSaleDateChange, onTypeChange, onPlatformChange, onSellerChange, guaranteeDraft, onGuaranteeChange, showGuarantee }: {
   mode: DrawerMode;
   sale: SaleForm;
   sellers: SellerProfile[];
@@ -1133,20 +1349,43 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
   rawSaleTotal: number;
   sellerCommissionPreview: number;
   ownerCommissionPreview: number;
+  operationCommissionPercentPreview: number | null;
   isSaving: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onUpdate: <K extends keyof SaleForm>(field: K, value: SaleForm[K]) => void;
+  onTotalAmountChange: (value: string) => void;
+  onOperationCommissionAmountChange: (value: string) => void;
+  onMoneyBlur: () => void;
   onSaleDateChange: (value: string) => void;
   onTypeChange: (type: SaleType) => void;
   onPlatformChange: (platformId: SalesPlatformId) => void;
-  onSellerChange: (name: string) => void;
+  onSellerChange: (id: string) => void;
+  guaranteeDraft: GuaranteeDraft;
+  onGuaranteeChange: (value: GuaranteeDraft) => void;
+  showGuarantee: boolean;
 }) {
+  const selectedSeller = sellers.find((seller) => seller.id === sale.sellerId);
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [initialPhone] = useState(sale.customerPhone || "");
+  const phoneChanged = (sale.customerPhone || "") !== initialPhone;
+  const phoneInvalid = !isValidBrazilPhone(sale.customerPhone || "") && (mode === "create" || phoneChanged);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    setSubmitAttempted(true);
+    if (phoneInvalid) {
+      event.preventDefault();
+      return;
+    }
+    onSubmit(event);
+  }
+
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
+    <form onSubmit={handleSubmit} className="space-y-5">
       <PanelHeader icon={mode === "edit" ? <Save size={18} /> : <PanelRightOpen size={18} />} title={mode === "edit" ? "Editar venda" : "Lançar nova venda"} description={mode === "edit" ? "Altere valor, pagamento, vendedor, observações e previsão. Tudo salva em tempo real no painel." : "Registre o pedido aqui. Recebimentos e comissões entram nos painéis corretos."} />
       <div className="grid gap-3">
         <SaleTypeButton active={sale.saleType === "pad"} title="PAD" description="Correios. Recebimento previsto em 7 dias úteis." onClick={() => onTypeChange("pad")} />
-        <SaleTypeButton active={sale.saleType === "cod"} title="COD" description="Motoboy. Defina a data de recebimento manualmente." onClick={() => onTypeChange("cod")} />
+        <SaleTypeButton active={sale.saleType === "cod"} title="COD" description="Motoboy. Defina a data da entrega ao cliente manualmente." onClick={() => onTypeChange("cod")} />
         <SaleTypeButton active={sale.saleType === "advance"} title="PAGAMENTO ANTECIPADO" description="Pix, boleto ou cartão. Sem recebimento pendente." onClick={() => onTypeChange("advance")} />
       </div>
 
@@ -1158,6 +1397,8 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
         <p className="text-[11px] font-semibold text-white/42">A plataforma mostra a origem da venda. A modalidade continua sendo definida acima: PAD, COD ou Pagamento Antecipado.</p>
       </div>
 
+      {showGuarantee ? <CoinzzGuaranteeBlock value={guaranteeDraft} onChange={onGuaranteeChange} /> : null}
+
       <OrderTagSelector
         selected={sale.orderTags || []}
         onChange={(nextTags) => {
@@ -1167,25 +1408,30 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
 
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Cliente"><input className={inputClass} value={sale.customerName} onChange={(e) => onUpdate("customerName", e.target.value)} placeholder="Nome do cliente" required /></Field>
-        <Field label="Telefone"><input className={inputClass} value={sale.customerPhone || ""} onChange={(e) => onUpdate("customerPhone", e.target.value)} placeholder="WhatsApp" required /></Field>
-        <Field label="Cidade"><input className={inputClass} value={sale.city} onChange={(e) => onUpdate("city", e.target.value)} placeholder="Cidade" required /></Field>
+        <Field label="Telefone / WhatsApp"><div className="relative"><span className="pointer-events-none absolute left-3.5 top-3 text-sm font-semibold text-slate-400">+55</span><input className={cn(inputClass, "pl-12", phoneInvalid && (phoneTouched || submitAttempted) && "border-danger/55 focus:border-danger/65")} inputMode="tel" autoComplete="tel-national" value={sale.customerPhone || ""} onChange={(e) => onUpdate("customerPhone", formatBrazilPhone(e.target.value))} onBlur={() => setPhoneTouched(true)} placeholder="(00) 00000-0000" required aria-invalid={phoneInvalid && (phoneTouched || submitAttempted)} /></div>{phoneInvalid && (phoneTouched || submitAttempted) ? <p className="mt-1.5 text-[11px] font-semibold text-danger">Informe DDD com 2 dígitos e telefone com 8 ou 9 dígitos.</p> : null}</Field>
+        {mode === "edit" ? <Field label="Cidade"><input className={inputClass} value={sale.city} onChange={(e) => onUpdate("city", e.target.value)} /></Field> : null}
+        <Field label="UF"><select className={inputClass} value={sale.state || ""} onChange={(e) => onUpdate("state", e.target.value)}><option value="" aria-label="Nenhuma UF" />{brazilianStates.map((state) => <option key={state} value={state}>{state}</option>)}</select></Field>
         {lockSeller ? (
           <Field label="Vendedor"><input className={inputClass} value={sale.sellerName} readOnly /></Field>
         ) : (
-          <Field label="Vendedor"><select className={inputClass} value={sale.sellerName} onChange={(e) => onSellerChange(e.target.value)}>{sellers.map((seller) => <option key={seller.login}>{seller.name}</option>)}</select></Field>
+          <Field label="Vendedor"><select className={inputClass} value={sale.sellerId || ""} onChange={(e) => onSellerChange(e.target.value)} required><option value="" disabled>Selecione</option>{sellers.map((seller) => <option key={seller.id} value={seller.id}>{seller.fullName || seller.name}</option>)}</select></Field>
         )}
-        <Field label="Valor da venda"><input className={inputClass} inputMode="decimal" value={sale.totalAmount} onChange={(e) => onUpdate("totalAmount", e.target.value)} placeholder="R$ 197,00" required /></Field>
-        <Field label="Comissão %"><input className={inputClass} inputMode="decimal" value={sale.commissionPercent} onChange={(e) => onUpdate("commissionPercent", e.target.value)} /></Field>
-        <Field label="Quantidade"><input className={inputClass} type="number" min={1} step="1" value={sale.quantity} onChange={(e) => onUpdate("quantity", e.target.value)} /></Field>
+        <Field label="Valor da venda"><input className={inputClass} inputMode="decimal" value={sale.totalAmount} onChange={(e) => onTotalAmountChange(e.target.value)} onBlur={onMoneyBlur} required /></Field>
+        <Field label="Valor líquido da comissão"><input className={inputClass} inputMode="decimal" value={sale.operationCommissionAmount} onChange={(e) => onOperationCommissionAmountChange(e.target.value)} onBlur={onMoneyBlur} /></Field>
+        <Field label="Comissão líquida %"><div className="relative"><input className={cn(inputClass, "pr-9 tabular-nums text-white/72")} value={operationCommissionPercentPreview == null ? "—" : operationCommissionPercentPreview.toFixed(2).replace(".", ",")} readOnly /><span className="pointer-events-none absolute right-3.5 top-3 text-sm text-slate-500">%</span></div></Field>
+        <Field label="Comissão do vendedor %"><input className={inputClass} inputMode="decimal" value={selectedSeller?.isOwner ? "0" : sale.commissionPercent} readOnly /></Field>
+        <Field label="Quantidade de frascos"><input className={inputClass} type="number" min={1} step="1" value={sale.bottleQuantity} onChange={(e) => onUpdate("bottleQuantity", e.target.value)} required={mode === "create"} /></Field>
         <Field label="Data da venda"><input className={inputClass} type="date" value={sale.saleDate || todayKey()} onChange={(e) => onSaleDateChange(e.target.value)} /></Field>
         <Field label="Hora da venda"><input className={inputClass} type="time" value={sale.saleTime || ""} onChange={(e) => onUpdate("saleTime", e.target.value)} /></Field>
-        <Field label="Data de recebimento"><input className={inputClass} type="date" value={sale.receivedDate || ""} onChange={(e) => { onUpdate("receivedDate", e.target.value); onUpdate("expectedPaymentDate", e.target.value); }} /></Field>
+        <Field label="Data da entrega ao cliente"><input className={inputClass} type="date" value={sale.receivedDate || ""} onChange={(e) => onUpdate("receivedDate", e.target.value)} /></Field>
         <Field label="Data de pagamento"><input className={inputClass} type="date" value={sale.paymentDate || ""} onChange={(e) => onUpdate("paymentDate", e.target.value)} /></Field>
         <Field label="Status do pagamento"><select className={inputClass} value={sale.paymentStatus} onChange={(e) => { const status = e.target.value as PaymentStatus; onUpdate("paymentStatus", status); if (status === "paid" && !sale.paymentDate) onUpdate("paymentDate", todayKey()); }}><option value="pending">Pendente</option><option value="paid">Pago</option><option value="cod">COD</option></select></Field>
         <Field label="Status do pedido"><select className={inputClass} value={normalizeOrderStatus(sale.orderStatus)} onChange={(e) => onUpdate("orderStatus", e.target.value as OrderStatus)}><option value="active">Ativo</option><option value="cancelled">Cancelado</option><option value="returned">Devolvido</option><option value="lost">Perdido</option><option value="review">Em análise</option></select></Field>
         <Field label="Status da entrega"><select className={inputClass} value={sale.deliveryStatus} onChange={(e) => onUpdate("deliveryStatus", e.target.value as DeliveryStatus)}><option value="scheduled">Agendado</option><option value="pending">Pendente</option><option value="delivered">Entregue</option><option value="risk">Risco</option><option value="rescheduled">Reagendado</option></select></Field>
         <div className="md:col-span-2"><Field label="Observação"><textarea className={cn(inputClass, "min-h-24 resize-none")} value={sale.notes || ""} onChange={(e) => { onUpdate("notes", e.target.value); onUpdate("orderStatusNote", e.target.value); }} placeholder="Endereço, confirmação, retorno, ajuste de pagamento ou observação do pedido..." /></Field></div>
       </div>
+
+      {mode === "edit" && sale.legacyQuantity != null && !sale.bottleQuantity ? <p className="text-[11px] font-semibold leading-5 text-amber/75">Registro antigo: quantidade original {sale.legacyQuantity}. A quantidade de frascos permanece em branco até confirmação manual.</p> : null}
 
       {invalidOrderStatuses.has(normalizeOrderStatus(sale.orderStatus)) ? (
         <div className="rounded-2xl border border-rose-300/[.22] bg-rose-500/[.075] px-4 py-3 text-xs font-semibold leading-relaxed text-rose-100/90">
@@ -1200,8 +1446,8 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
       ) : (
         <div className="grid gap-3 md:grid-cols-3">
           <Preview label="Valor contabilizado" value={brl(saleTotal)} tone="money" />
-          <Preview label="Minha comissão" value={brl(ownerCommissionPreview)} tone="cyan" />
-          <Preview label="Subcomissão" value={brl(isOwnerSeller(sale.sellerName) ? 0 : sellerCommissionPreview)} tone="purple" />
+          <Preview label="Comissão líquida da operação" value={brl(ownerCommissionPreview)} tone="cyan" />
+          <Preview label="Subcomissão" value={brl(selectedSeller?.isOwner ? 0 : sellerCommissionPreview)} tone="purple" />
         </div>
       )}
       <button disabled={isSaving} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-money/30 bg-money px-6 py-3 text-sm font-black text-[#02130b] shadow-[0_0_44px_rgba(16,185,129,.2)] transition hover:bg-[#22e59b] disabled:opacity-60"><Plus size={17} /> {isSaving ? "Salvando..." : mode === "edit" ? "Salvar alterações" : "Lançar venda agora"}</button>
@@ -1209,9 +1455,18 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
   );
 }
 
+function CoinzzGuaranteeBlock({ value, onChange }: { value: GuaranteeDraft; onChange: (value: GuaranteeDraft) => void }) {
+  const helper = value.guaranteeType === "conditional" ? "Só será devida se o cliente não pagar e houver cobrança do produtor." : "Deve ser repassada ao produtor independentemente do pagamento do cliente.";
+  return <section className="rounded-2xl border border-amber/15 bg-amber/[.035] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,.025)]"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-amber">Garantia Coinzz</p><p className="mt-1 text-xs text-slate-500">Configuração copiada para esta venda pós-paga.</p></div>{value.paid ? <span className="rounded-lg border border-money/20 px-2 py-1 text-[10px] text-money">Paga</span> : null}</div>{value.setupRequired ? <p className="mt-3 rounded-xl border border-amber/15 bg-black/10 p-3 text-xs text-amber/80">A migration 024 precisa ser aplicada para ativar esta garantia.</p> : <div className="mt-4 grid gap-3 md:grid-cols-2"><Field label="Tipo da garantia"><select className={inputClass} value={value.guaranteeType} disabled={value.paid} onChange={(event) => onChange({ ...value, guaranteeType: event.target.value as GuaranteeType })}><option value="conditional">Condicional</option><option value="mandatory">Obrigatória</option></select></Field><Field label="Valor da garantia"><input className={inputClass} inputMode="decimal" value={value.guaranteeAmount} disabled={value.paid} onChange={(event) => onChange({ ...value, guaranteeAmount: event.target.value })} required /></Field><p className="md:col-span-2 text-[11px] leading-5 text-slate-400">{value.paid ? "Para alterar tipo ou valor, estorne primeiro o pagamento em Financeiro → Garantias pós-pagas." : helper}</p></div>}</section>;
+}
 
-function CashMovementHistory({ rows }: { rows: CashMovementRow[] }) {
-  const grouped = rows.reduce<Record<string, CashMovementRow[]>>((acc, row) => {
+function CashMovementHistory({ rows, activeStart, activeEnd, loading }: { rows: CashMovementRow[]; activeStart: string; activeEnd: string; loading: boolean }) {
+  const [scope, setScope] = useState<MovementHistoryScope>("period");
+  const visibleRows = useMemo(() => {
+    if (scope === "all") return rows;
+    return rows.filter((row) => isDateInRange(row.date, activeStart, activeEnd));
+  }, [rows, scope, activeStart, activeEnd]);
+  const grouped = visibleRows.reduce<Record<string, CashMovementRow[]>>((acc, row) => {
     const key = row.date || todayKey();
     acc[key] = acc[key] || [];
     acc[key].push(row);
@@ -1240,8 +1495,16 @@ function CashMovementHistory({ rows }: { rows: CashMovementRow[] }) {
             <p className="mt-1.5 max-w-3xl text-[13px] font-normal leading-5 text-slate-400/78">Entradas no caixa, saques e vendas vinculadas em uma leitura limpa de extrato operacional.</p>
           </div>
         </div>
-        <span className="rounded-full border border-slate-300/[.08] bg-white/[.032] px-3.5 py-2 text-[12px] font-medium text-slate-300/80 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">{rows.length} movimentações</span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex rounded-xl border border-slate-300/[.08] bg-white/[.025] p-1">
+            <button type="button" onClick={() => setScope("period")} className={cn("rounded-lg px-3 py-1.5 text-[11px] font-medium transition", scope === "period" ? "bg-money/12 text-money" : "text-slate-500 hover:text-slate-200")}>Período selecionado</button>
+            <button type="button" onClick={() => setScope("all")} className={cn("rounded-lg px-3 py-1.5 text-[11px] font-medium transition", scope === "all" ? "bg-white/[.07] text-white" : "text-slate-500 hover:text-slate-200")}>Todo o histórico</button>
+          </div>
+          <span className="rounded-full border border-slate-300/[.08] bg-white/[.032] px-3.5 py-2 text-[12px] font-medium text-slate-300/80 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">{loading ? "Carregando dados" : `${visibleRows.length} movimentações`}</span>
+        </div>
       </div>
+
+      {scope === "all" ? <p className="relative mt-3 text-right text-[11px] font-medium text-amber/80">Visualização completa, sem limite do período selecionado na página.</p> : null}
 
       <div className="relative mt-4 overflow-hidden rounded-[24px] border border-slate-300/[.075] bg-[#07111b]/72 shadow-[inset_0_1px_0_rgba(255,255,255,.035),0_14px_46px_rgba(0,0,0,.22)] kau-history-inner-surface">
         <div className="premium-scrollbar">
@@ -1249,8 +1512,8 @@ function CashMovementHistory({ rows }: { rows: CashMovementRow[] }) {
             <div className="cash-history-header grid gap-5 border-b border-slate-400/[.05] bg-white/[.010] px-6 py-3.5 text-[10px] font-medium uppercase tracking-[.12em] text-slate-400/55">
               <span>Data</span><span>Descrição</span><span>Pedido</span><span>Movimentação</span><span className="text-right">Valor</span><span className="text-right">Comissão</span><span className="text-right">Líquido</span><span>Status</span>
             </div>
-            {dates.length === 0 ? (
-              <TableEmpty message="Nenhuma movimentação de caixa neste período." />
+            {loading ? <HistoryLoadingRows /> : dates.length === 0 ? (
+              <TableEmpty message={scope === "period" ? "Nenhuma movimentação encontrada no período selecionado." : "Nenhuma movimentação encontrada no histórico."} />
             ) : (
               <div className="max-h-[360px] overflow-y-auto premium-scrollbar">
                 {dates.map((date) => {
@@ -1345,12 +1608,12 @@ function MovementTable({ items, view, onEdit, onDelete, onMarkPaid, isAdmin }: {
               const cashDate = cashDateForSale(item);
               return (
                 <div key={item.id} className={cn("sales-movement-row grid items-center gap-3 border-b border-slate-300/[.055] px-4 py-[17px] transition duration-[180ms] ease-out last:border-b-0 hover:bg-white/[.032]", blocked && "bg-rose-950/[.055] opacity-[.92]")}>
-                  <div className="min-w-0"><p className={cn("truncate text-[14px] font-semibold tracking-[-.01em] text-white", blocked && "text-white/72 line-through decoration-rose-300/35")}>{item.customerName}</p><p className="mt-1 truncate text-[12px] font-normal text-white/58">{item.city || "Sem cidade"} · {view === "cash" ? `caixa em ${formatDate(cashDate)}` : `venda em ${formatDate(item.saleDate || String(item.createdAt || "").slice(0, 10))}`}</p></div>
+                  <div className="min-w-0"><p className={cn("truncate text-[14px] font-semibold tracking-[-.01em] text-white", blocked && "text-white/72 line-through decoration-rose-300/35")}>{item.customerName}</p><p className="mt-1 truncate text-[12px] font-normal text-white/58">{item.state || "—"} · {view === "cash" ? `caixa em ${formatDate(cashDate)}` : `venda em ${formatDate(item.saleDate || String(item.createdAt || "").slice(0, 10))}`}</p></div>
                   <div className="flex justify-start"><PlatformTag platformId={item.salePlatform} fallback={saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod)} /></div>
                   <p className="truncate text-[13px] font-medium text-white/76">{item.sellerName}</p>
                   <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38 line-through decoration-rose-300/35" : "text-[#34D399]")}>{blocked ? "—" : brl(item.totalAmount)}</p>
                   <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#38BDF8]")}>{blocked ? "—" : brl(isAdmin ? ownerCommissionForSale(item) : subCommissionForSale(item))}</p>
-                  {isAdmin ? <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#A78BFA]")}>{blocked ? "—" : (subCommissionForSale(item) ? brl(subCommissionForSale(item)) : "—")}</p> : null}
+                  {isAdmin ? <p className={cn("text-center text-[14px] font-semibold tabular-nums tracking-[-.02em]", blocked ? "text-white/38" : "text-[#A78BFA]")}>{blocked ? "—" : brl(subCommissionForSale(item))}</p> : null}
                   <div className="flex justify-center"><SaleStatusBadge item={item} /></div>
                   <div className="flex items-center justify-center gap-1.5">
                     <button type="button" onClick={() => onEdit(item)} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-cyan/12 bg-cyan/[.075] text-cyan/90 transition duration-[180ms] ease-out hover:border-cyan/28 hover:bg-cyan/12 hover:text-white" aria-label={`Abrir venda de ${item.customerName}`} title="Abrir e editar venda"><Eye size={13} /></button>
@@ -1372,9 +1635,9 @@ function MovementFooter({ items, view, isAdmin }: { items: SaleRecord[]; view: M
   const total = validItems.reduce((sum, item) => sum + item.totalAmount, 0);
   const operationCommission = validItems.reduce((sum, item) => sum + ownerCommissionForSale(item), 0);
   const sellerCommission = validItems.reduce((sum, item) => sum + subCommissionForSale(item), 0);
-  const cashTotal = validItems.reduce((sum, item) => sum + item.totalAmount, 0);
+  const cashTotal = validItems.reduce((sum, item) => sum + (isAdmin ? operationCashValueForSale(item) : subCommissionForSale(item)), 0);
   const commissionLabel = isAdmin ? "Comissão" : "Minha comissão";
-  const commissionValue = isAdmin && view === "cash" ? operationCommission + sellerCommission : isAdmin ? operationCommission : sellerCommission;
+  const commissionValue = isAdmin ? operationCommission : sellerCommission;
 
   return (
     <div className={cn("mt-4 grid gap-3", isAdmin ? "md:grid-cols-4" : "md:grid-cols-3")}>
@@ -1537,20 +1800,17 @@ function WithdrawalDrawer({ form, balance, cashRows, isAdmin, isSaving, onClose,
   );
 }
 
-function CommandCard({ title, value, subtext, helper, comparison, tone, icon, featured = false, action }: { title: string; value: string; subtext: string; helper: string; comparison: string; tone: Tone; icon: ReactNode; featured?: boolean; action?: ReactNode }) {
-  return <div className={cn("executive-card kau-surgical-card group relative overflow-hidden rounded-[26px] border p-4 transition duration-[180ms] ease-out hover:-translate-y-0.5", toneColor(tone), featured ? "min-h-[196px] shadow-[0_18px_58px_rgba(16,185,129,.09)]" : "min-h-[196px]")}><div className="pointer-events-none absolute inset-0 opacity-65 [background:radial-gradient(circle_at_84%_16%,rgba(255,255,255,.10),transparent_20%),linear-gradient(135deg,rgba(255,255,255,.052),transparent_54%)]" /><div className="relative flex items-start justify-between gap-3"><div><p className="text-[14px] font-semibold tracking-[-.018em] text-white">{title}</p><p className="mt-1 text-[11px] font-medium text-white/60">{subtext}</p></div><div className={cn("rounded-2xl border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,.045)]", toneColor(tone))}>{icon}</div></div><p className={cn("relative mt-5 truncate font-semibold tabular-nums tracking-[-.055em]", featured ? "text-4xl md:text-[42px]" : "text-3xl")}>{value}</p><div className="relative mt-4 flex items-end justify-between gap-4"><div><p className="text-[11px] font-semibold text-white/80">{helper}</p><p className="mt-1 text-[11px] font-medium text-white/52">{comparison}</p></div><MiniSignal tone={tone} /></div>{action ? <div className="relative mt-3">{action}</div> : null}</div>;
+function CommandCard({ title, value, subtext, helper, comparison, tone, icon, featured = false, action, loading = false }: { title: string; value: string; subtext: string; helper: string; comparison: string; tone: Tone; icon: ReactNode; featured?: boolean; action?: ReactNode; loading?: boolean }) {
+  return <div className={cn("executive-card kau-surgical-card group relative overflow-hidden rounded-[26px] border p-4 transition duration-[180ms] ease-out hover:-translate-y-0.5", toneColor(tone), featured ? "min-h-[196px] shadow-[0_18px_58px_rgba(16,185,129,.09)]" : "min-h-[196px]")}><div className="pointer-events-none absolute inset-0 opacity-65 [background:radial-gradient(circle_at_84%_16%,rgba(255,255,255,.10),transparent_20%),linear-gradient(135deg,rgba(255,255,255,.052),transparent_54%)]" /><div className="relative flex items-start justify-between gap-3"><div><p className="text-[14px] font-semibold tracking-[-.018em] text-white">{title}</p>{loading ? <div className="mt-2 h-2.5 w-24 animate-pulse rounded-full bg-white/10" /> : <p className="mt-1 text-[11px] font-medium text-white/60">{subtext}</p>}</div><div className={cn("rounded-2xl border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,.045)]", toneColor(tone))}>{icon}</div></div>{loading ? <><div className="relative mt-6 h-9 w-3/4 animate-pulse rounded-xl bg-white/10" /><div className="relative mt-5 h-3 w-1/2 animate-pulse rounded-full bg-white/[.07]" /><div className="relative mt-2 h-2.5 w-2/3 animate-pulse rounded-full bg-white/[.05]" /></> : <><p className={cn("relative mt-5 truncate font-semibold tabular-nums tracking-[-.055em]", featured ? "text-4xl md:text-[42px]" : "text-3xl")}>{value}</p><div className="relative mt-4 flex items-end justify-between gap-4"><div><p className="text-[11px] font-semibold text-white/80">{helper}</p><p className="mt-1 text-[11px] font-medium text-white/52">{comparison}</p></div><MiniSignal tone={tone} /></div>{action ? <div className="relative mt-3">{action}</div> : null}</>}</div>;
 }
-
 
 function PremiumPanel({ children, className, glow = "none" }: { children: ReactNode; className?: string; glow?: "cyan" | "purple" | "none" }) {
   return <section className={cn("luxury-surface kau-surgical-surface relative overflow-hidden rounded-[28px] p-4 self-start", glow === "cyan" && "shadow-[0_24px_90px_rgba(24,215,255,.07)] after:pointer-events-none after:absolute after:inset-0 after:bg-[radial-gradient(circle_at_8%_0%,rgba(24,215,255,.10),transparent_28%)]", glow === "purple" && "shadow-[0_24px_90px_rgba(168,85,247,.085)] after:pointer-events-none after:absolute after:inset-0 after:bg-[radial-gradient(circle_at_92%_0%,rgba(168,85,247,.12),transparent_30%)]", className)}>{children}</section>;
 }
 
-
 function PanelHeader({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) {
   return <div className="relative z-10 flex flex-wrap items-start justify-between gap-4 border-b border-slate-300/[.07] pb-4"><div className="flex gap-3"><div className="mt-1 rounded-xl border border-white/10 bg-white/[.045] p-2 text-cyan shadow-[inset_0_1px_0_rgba(255,255,255,.06)]">{icon}</div><div><h2 className="text-[20px] font-semibold tracking-[-.035em] text-white">{title}</h2><p className="mt-1 max-w-2xl text-[13px] leading-5 text-white/62">{description}</p></div></div>{typeof action === "string" ? <span className="rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-semibold text-white/65">{action}</span> : action}</div>;
 }
-
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return <button type="button" onClick={onClick} className={cn("rounded-xl px-3.5 py-2 text-[11px] font-medium uppercase tracking-[.08em] transition duration-[180ms] ease-out", active ? "bg-white/[.07] text-slate-50 shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]" : "text-slate-400/72 hover:bg-white/[.035] hover:text-slate-100")}>{children}</button>;
@@ -1592,7 +1852,6 @@ function PlatformTag({ platformId, fallback }: { platformId?: string; fallback?:
   );
 }
 
-
 function PlatformMini({ platformId }: { platformId?: string }) {
   const platform = getSalesPlatform(platformId);
   if (!platform) return null;
@@ -1606,7 +1865,6 @@ function PlatformMini({ platformId }: { platformId?: string }) {
   );
 }
 
-
 function SaleTypeButton({ title, description, active, onClick }: { title: string; description: string; active: boolean; onClick: () => void }) {
   return <button type="button" onClick={onClick} className={cn("rounded-2xl border px-4 py-4 text-left transition", active ? "border-money/35 bg-money/10 text-money shadow-[0_0_35px_rgba(16,185,129,.08)]" : "border-white/10 bg-white/[.03] text-white/72 hover:bg-white/[.055] hover:text-white")}><p className="text-sm font-black">{title}</p><p className="mt-1 text-xs text-white/58">{description}</p></button>;
 }
@@ -1615,19 +1873,25 @@ function Preview({ label, value, tone }: { label: string; value: string; tone: T
   return <div className={cn("rounded-2xl border p-4", toneColor(tone))}><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/50">{label}</p><p className="mt-2 truncate text-xl font-black">{value}</p></div>;
 }
 
-function MiniIndicator({ label, value, tone }: { label: string; value: string; tone: Tone }) {
-  return <div className="relative overflow-hidden rounded-2xl border border-slate-300/[.075] bg-[rgba(15,23,42,.68)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,.03)]"><div className={cn("absolute left-0 top-0 h-full w-1", tone === "money" ? "bg-emerald-400/60" : tone === "cyan" ? "bg-sky-300/55" : tone === "purple" ? "bg-violet-300/45" : "bg-slate-300/25")} /><p className="text-[10px] font-medium uppercase tracking-[.12em] text-slate-400/65">{label}</p><p className="mt-2 truncate text-[22px] font-semibold tabular-nums tracking-[-.035em] text-slate-50">{value}</p></div>;
+function MiniIndicator({ label, value, tone, loading = false }: { label: string; value: string; tone: Tone; loading?: boolean }) {
+  return <div className="relative overflow-hidden rounded-2xl border border-slate-300/[.075] bg-[rgba(15,23,42,.68)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,.03)]"><div className={cn("absolute left-0 top-0 h-full w-1", tone === "money" ? "bg-emerald-400/60" : tone === "cyan" ? "bg-sky-300/55" : tone === "purple" ? "bg-violet-300/45" : "bg-slate-300/25")} /><p className="text-[10px] font-medium uppercase tracking-[.12em] text-slate-400/65">{label}</p>{loading ? <div className="mt-3 h-6 w-2/3 animate-pulse rounded-lg bg-white/10" /> : <p className="mt-2 truncate text-[22px] font-semibold tabular-nums tracking-[-.035em] text-slate-50">{value}</p>}</div>;
+}
+
+function PanelLoading() {
+  return <div className="mt-5 space-y-3 rounded-[24px] border border-white/[.07] bg-black/15 p-5" aria-label="Carregando dados"><div className="h-4 w-1/3 animate-pulse rounded-full bg-white/10" /><div className="h-12 animate-pulse rounded-2xl bg-white/[.055]" /><div className="h-12 animate-pulse rounded-2xl bg-white/[.04]" /><div className="h-12 animate-pulse rounded-2xl bg-white/[.03]" /></div>;
+}
+
+function HistoryLoadingRows() {
+  return <div className="space-y-px p-2" aria-label="Carregando histórico">{[0, 1, 2].map((item) => <div key={item} className="flex items-center gap-4 px-4 py-4"><div className="h-4 w-24 animate-pulse rounded-full bg-white/10" /><div className="h-4 flex-1 animate-pulse rounded-full bg-white/[.06]" /><div className="h-4 w-28 animate-pulse rounded-full bg-white/[.08]" /></div>)}</div>;
 }
 
 function FooterMetric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: Tone }) {
   return <div className={cn("relative overflow-hidden rounded-2xl border p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]", toneColor(tone))}><div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,.055),transparent_60%)]" /><p className="relative text-[10px] font-semibold uppercase tracking-[.13em] text-white/56">{label}</p><p className="relative mt-1 truncate text-sm font-semibold tracking-[-.025em]">{value}</p></div>;
 }
 
-
 function MiniSignal({ tone }: { tone: Tone }) {
   return <div className="flex h-12 items-end gap-1 opacity-70 transition duration-[180ms] group-hover:opacity-100">{[30, 54, 42, 68, 48].map((height, index) => <span key={index} className={cn("w-1.5 rounded-full", tone === "purple" ? "bg-purple" : tone === "cyan" ? "bg-cyan" : tone === "amber" ? "bg-amber" : "bg-money")} style={{ height }} />)}</div>;
 }
-
 
 function PaymentState({ paid }: { paid: boolean }) {
   return (
@@ -1672,12 +1936,10 @@ function SaleStatusBadge({ item }: { item: SaleRecord }) {
   );
 }
 
-
 function Tag({ tone }: { tone: string }) {
   const color = tone === "PAD" ? "border-cyan/25 bg-cyan/10 text-cyan" : tone === "COD" ? "border-amber/25 bg-amber/10 text-amber" : "border-money/25 bg-money/10 text-money";
   return <span className={cn("inline-flex w-fit rounded-lg border px-2 py-1 text-[10px] font-semibold uppercase", color)}>{tone}</span>;
 }
-
 
 function OrderTagSelector({ selected, onChange }: { selected: OrderTag[]; onChange: (tags: OrderTag[]) => void }) {
   const normalized = normalizeOrderTags(selected);
@@ -1710,6 +1972,7 @@ function OrderTagSelector({ selected, onChange }: { selected: OrderTag[]; onChan
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isOpen]);
+
   const filteredOptions = orderTagOptions.filter((option) => {
     const term = query.trim().toLowerCase();
     if (!term) return true;
@@ -1832,7 +2095,6 @@ function toneColor(tone: Tone) {
   if (tone === "danger") return "border-danger/24 bg-danger/[.105] text-danger";
   return "border-white/10 bg-white/[.035] text-white";
 }
-
 
 function toneBorder(tone: Exclude<Tone, "neutral">) {
   if (tone === "money") return "border-money/25";

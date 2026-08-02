@@ -14,22 +14,36 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+let cachedProfile: UserProfile | null | undefined;
+let pendingProfileRequest: Promise<UserProfile | null> | null = null;
+
+function requestProfile() {
+  if (pendingProfileRequest) return pendingProfileRequest;
+
+  pendingProfileRequest = fetch("/api/auth/me", { cache: "no-store", credentials: "include" })
+    .then(async (response) => {
+      if (!response.ok) return null;
+      const payload = await response.json();
+      return (payload.profile ?? null) as UserProfile | null;
+    })
+    .catch(() => null)
+    .then((profile) => {
+      cachedProfile = profile;
+      return profile;
+    })
+    .finally(() => {
+      pendingProfileRequest = null;
+    });
+
+  return pendingProfileRequest;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(() => cachedProfile ?? null);
   const [isLoading, setIsLoading] = useState(true);
 
   const refreshProfile = useCallback(async () => {
-    try {
-      const response = await fetch("/api/auth/me", { cache: "no-store", credentials: "include" });
-      if (!response.ok) {
-        setProfile(null);
-        return;
-      }
-      const payload = await response.json();
-      setProfile(payload.profile ?? null);
-    } catch {
-      setProfile(null);
-    }
+    setProfile(await requestProfile());
   }, []);
 
   useEffect(() => {
@@ -38,6 +52,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    cachedProfile = null;
+    pendingProfileRequest = null;
     setProfile(null);
     window.location.href = "/login";
   }, []);

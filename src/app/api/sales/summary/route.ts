@@ -18,52 +18,57 @@ function calculateCommission(total: unknown, rate: unknown) {
 }
 
 
-function normalizedOrderStatus(row: Record<string, any>) {
+function normalizedOrderStatus(row: Record<string, unknown>) {
   return getOrderStatusFromSale(row);
 }
 
-function saleState(row: Record<string, any>) {
+function saleState(row: Record<string, unknown>) {
   return getSaleFinancialState(row);
 }
 
-function isInvalidForMetrics(row: Record<string, any>) {
+function isInvalidForMetrics(row: Record<string, unknown>) {
   return !saleState(row).isValidSale;
 }
 
-function isFinanciallyBlocked(row: Record<string, any>) {
+function isFinanciallyBlocked(row: Record<string, unknown>) {
   return isInvalidForMetrics(row);
 }
 
-function isOwnerSeller(name?: string) {
-  return String(name || "").toLowerCase().includes("rayany");
-}
-
-function ownerCommission(row: Record<string, any>) {
+function ownerCommission(row: Record<string, unknown>) {
   if (isFinanciallyBlocked(row)) return 0;
-  if (isOwnerSeller(row.seller_name)) return calculateCommission(row.total_amount, row.commission_rate || 15);
   const amount = Number(row.total_amount || 0);
-  return Math.round(amount * 0.10 * 100) / 100;
+  const exactAmount = row.operation_commission_amount == null ? null : Number(row.operation_commission_amount);
+  if (exactAmount !== null && Number.isFinite(exactAmount)) return Math.round(exactAmount * 100) / 100;
+  const explicitPercent = row.operation_commission_percent == null ? null : Number(row.operation_commission_percent);
+  if (explicitPercent !== null && Number.isFinite(explicitPercent) && explicitPercent >= 0) return Math.round(amount * (explicitPercent / 100) * 100) / 100;
+  return 0;
 }
 
-function subCommission(row: Record<string, any>) {
+function subCommission(row: Record<string, unknown>) {
   if (isFinanciallyBlocked(row)) return 0;
-  if (isOwnerSeller(row.seller_name)) return 0;
-  return calculateCommission(row.total_amount, row.commission_rate || 5);
+  const exactAmount = row.commission_amount == null ? null : Number(row.commission_amount);
+  if (exactAmount !== null && Number.isFinite(exactAmount) && exactAmount >= 0) return Math.round(exactAmount * 100) / 100;
+  return calculateCommission(row.total_amount, row.commission_rate);
 }
 
-function mapSale(row: Record<string, any>) {
+function mapSale(row: Record<string, unknown>) {
   return {
     id: row.id,
     customerName: row.customer_name,
     customerPhone: row.customer_phone || undefined,
     city: row.city,
+    state: row.state || undefined,
     productName: row.product_name,
     quantity: Number(row.quantity),
+    kitQuantity: row.kit_quantity == null ? null : Number(row.kit_quantity),
+    bottleQuantity: row.bottle_quantity == null ? null : Number(row.bottle_quantity),
     totalAmount: Number(row.total_amount),
+    operationCommissionAmount: row.operation_commission_amount == null ? null : Number(row.operation_commission_amount),
+    operationCommissionPercent: row.operation_commission_percent == null ? null : Number(row.operation_commission_percent),
     sellerName: row.seller_name,
     salePlatform: row.sale_platform || undefined,
     commissionRate: commissionPercentFromStored(row.commission_rate),
-    commissionAmount: calculateCommission(row.total_amount, row.commission_rate),
+    commissionAmount: row.commission_amount == null ? calculateCommission(row.total_amount, row.commission_rate) : Number(row.commission_amount),
     paymentMethod: row.payment_method,
     paymentStatus: row.payment_status,
     deliveryType: row.delivery_type,
@@ -98,7 +103,7 @@ export async function GET() {
     return NextResponse.json({ configured: true, error: error.message }, { status: 500 });
   }
 
-  const rows = (data ?? []) as Record<string, any>[];
+  const rows = (data ?? []) as Record<string, unknown>[];
   const todayRows = rows.filter((row) => saleState(row).countsRevenue);
   const scheduledTodayRows = rows.filter((row) => saleState(row).isValidSale && String(row.expected_payment_date || "") === today);
   const dailyRevenue = todayRows.reduce((sum, row) => sum + Number(row.total_amount || 0), 0);
@@ -110,7 +115,7 @@ export async function GET() {
     const current = sellerMap.get(sellerName) ?? { sellerName, salesCount: 0, revenue: 0, commission: 0, commissionRate: commissionPercentFromStored(row.commission_rate) };
     current.salesCount += 1;
     current.revenue += Number(row.total_amount || 0);
-    current.commission += calculateCommission(row.total_amount, row.commission_rate);
+    current.commission += subCommission(row);
     current.commissionRate = commissionPercentFromStored(row.commission_rate || current.commissionRate || 0);
     sellerMap.set(sellerName, current);
   }

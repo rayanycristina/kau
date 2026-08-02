@@ -3,13 +3,31 @@ import { applySellerScopeToBody, forbiddenResponse, isAdmin, isSeller, requireAu
 import { getSupabaseServerClient, hasSupabaseConfig } from "@/lib/supabase-server";
 import type { SaleInput } from "@/data/sales-types";
 import type { UserProfile } from "@/data/user-profile-types";
+import { roundMoney } from "@/data/money";
 
 export const dynamic = "force-dynamic";
 
 function toMoney(value: unknown) {
-  const number = typeof value === "number" ? value : Number(String(value).replace(",", "."));
-  if (!Number.isFinite(number) || number <= 0) return null;
-  return Math.round(number * 100) / 100;
+  const number = roundMoney(value);
+  if (number === null || !Number.isFinite(number) || number <= 0) return null;
+  return number;
+}
+
+function toOptionalMoney(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const number = roundMoney(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
+function toOptionalPositiveInteger(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function cleanState(value: unknown) {
+  const state = String(value || "").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(state) ? state : null;
 }
 
 function cleanText(value: unknown) {
@@ -93,13 +111,6 @@ function isOrderSchemaError(error: { message?: string } | null | undefined) {
   return /order_status|order_status_note|order_tags|schema cache|column/i.test(String(error?.message || ""));
 }
 
-function orderSchemaErrorResponse() {
-  return NextResponse.json(
-    { error: "O Supabase ainda não está com as colunas de Status do Pedido/Etiquetas. Rode a migration supabase/018_order_status_cancelled_visibility_fix.sql no SQL Editor e tente salvar novamente." },
-    { status: 409 }
-  );
-}
-
 function platformName(value: unknown) {
   const platform = cleanPlatform(value);
   if (platform === "payt") return "Payt";
@@ -121,11 +132,7 @@ function expectedPaymentDateForSale(body: Partial<SaleInput>) {
   const explicitDate = cleanText(body.expectedPaymentDate);
   if (explicitDate) return explicitDate;
   const paymentStatus = String(body.paymentStatus || "").toLowerCase();
-  const deliveryStatus = String(body.deliveryStatus || "").toLowerCase();
-  const paymentMethod = String(body.paymentMethod || "").toLowerCase();
-  const deliveryType = String(body.deliveryType || "").toLowerCase();
-  const isAdvanceOrPaid = paymentStatus === "paid" || deliveryStatus === "delivered" || paymentMethod.includes("antecip") || deliveryType.includes("antecip");
-  return isAdvanceOrPaid ? cleanText(body.saleDate) : null;
+  return paymentStatus === "paid" ? cleanText(body.saleDate) : null;
 }
 
 function normalizeCommissionRate(value: unknown, fallbackPercent = 5) {
@@ -149,16 +156,56 @@ function calculateCommission(total: unknown, rate: unknown) {
   return Math.round(amount * (percent / 100) * 100) / 100;
 }
 
+function operationCommissionPercent(amount: number | null, total: number, explicit: unknown) {
+  if (amount !== null && total > 0) return Math.round((amount / total) * 100 * 10000) / 10000;
+  if (explicit === undefined || explicit === null || explicit === "") return null;
+  const percent = Number(explicit);
+  return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? Math.round(percent * 10000) / 10000 : null;
+}
+
+function isSalesEnhancementSchemaError(error: { message?: string } | null | undefined) {
+  return /operation_commission_amount|operation_commission_percent|kit_quantity|bottle_quantity|\bstate\b/i.test(String(error?.message || ""));
+}
+
+function isSellerManagementSchemaError(error: { message?: string } | null | undefined) {
+  return /seller_id|public\.sellers|relation ['"]?sellers/i.test(String(error?.message || ""));
+}
+
+async function resolveOperationalSeller(supabase: ReturnType<typeof getSupabaseServerClient>, profile: UserProfile, sellerId?: string | null) {
+  let query = supabase.from("sellers").select("id,user_id,full_name,display_name,commission_percent,status,is_owner");
+  query = isAdmin(profile) ? query.eq("id", sellerId || "") : query.eq("user_id", profile.id);
+  const { data, error } = await query.maybeSingle();
+  if (error) return { error: isSellerManagementSchemaError(error) ? "A migration 026 precisa ser aplicada para usar o cadastro de vendedores." : error.message } as const;
+  if (!data) return { error: "Vendedor não encontrado no cadastro operacional." } as const;
+  if (data.status !== "active") return { error: "Este vendedor está inativo e não pode receber novas vendas." } as const;
+  return { seller: data } as const;
+}
+
+function salesEnhancementSchemaErrorResponse() {
+  return NextResponse.json(
+    { error: "A migration 025 precisa ser aplicada antes de salvar UF, quantidades separadas e comissão líquida exata." },
+    { status: 409 }
+  );
+}
+
 function normalizeSale(body: Partial<SaleInput>) {
   const totalAmount = toMoney(body.totalAmount);
   const quantity = Number(body.quantity ?? 1);
   const sellerName = cleanText(body.sellerName);
-  const commissionRate = normalizeCommissionRate(body.commissionRate, sellerName?.toLowerCase().includes("rayany") ? 15 : 5);
+  const commissionRate = normalizeCommissionRate(body.commissionRate, 0);
+  const exactOperationCommission = toOptionalMoney(body.operationCommissionAmount);
+  const kitQuantity = toOptionalPositiveInteger(body.kitQuantity);
+  const bottleQuantity = toOptionalPositiveInteger(body.bottleQuantity);
+  const state = cleanState(body.state);
 
   if (!cleanText(body.customerName)) return { error: "Informe o nome do cliente." } as const;
   if (!cleanText(body.city)) return { error: "Informe a cidade do cliente." } as const;
+  if (body.state && !state) return { error: "Informe uma UF válida com duas letras." } as const;
   if (!totalAmount) return { error: "Informe um valor total valido." } as const;
   if (!Number.isInteger(quantity) || quantity <= 0) return { error: "Informe uma quantidade valida." } as const;
+  if (body.kitQuantity != null && kitQuantity === null) return { error: "Informe uma quantidade de kits válida." } as const;
+  if (body.bottleQuantity != null && bottleQuantity === null) return { error: "Informe uma quantidade de frascos válida." } as const;
+  if (body.operationCommissionAmount != null && exactOperationCommission === null) return { error: "Informe um valor líquido de comissão válido." } as const;
   if (!sellerName) return { error: "Informe o vendedor." } as const;
 
   return {
@@ -166,21 +213,27 @@ function normalizeSale(body: Partial<SaleInput>) {
       customer_name: cleanText(body.customerName),
       customer_phone: cleanText(body.customerPhone),
       city: cleanText(body.city),
+      state,
       product_name: cleanText(body.productName) || "Produto",
       quantity,
+      kit_quantity: kitQuantity,
+      bottle_quantity: bottleQuantity,
       total_amount: totalAmount,
+      operation_commission_amount: exactOperationCommission,
+      operation_commission_percent: operationCommissionPercent(exactOperationCommission, totalAmount, body.operationCommissionPercent),
       seller_name: sellerName,
+      seller_id: cleanText(body.sellerId),
       sale_platform: cleanPlatform(body.salePlatform),
       commission_rate: commissionRate,
       payment_method: cleanText(body.paymentMethod) || "PAGAMENTO ANTECIPADO",
-      payment_status: body.paymentStatus || "paid",
+      payment_status: body.paymentStatus || "pending",
       delivery_type: cleanText(body.deliveryType) || "Entrega padrão",
       delivery_status: body.deliveryStatus || "pending",
       order_status: primaryOrderStatus(body.orderStatus),
-      order_tags: cleanOrderTags((body as any).orderTags),
+      order_tags: cleanOrderTags(body.orderTags),
       order_status_note: cleanText(body.orderStatusNote),
       expected_payment_date: expectedPaymentDateForSale(body),
-      received_date: cleanText(body.receivedDate) || cleanText(body.expectedPaymentDate),
+      received_date: cleanText(body.receivedDate),
       payment_date: cleanText(body.paymentDate) || (String(body.paymentStatus || "").toLowerCase() === "paid" ? cleanText(body.saleDate) || String(new Date().toISOString()).slice(0, 10) : null),
       sale_time: cleanText(body.saleTime),
       notes: cleanText(body.notes),
@@ -189,23 +242,29 @@ function normalizeSale(body: Partial<SaleInput>) {
   } as const;
 }
 
-export function mapSale(row: Record<string, any>) {
+function mapSale(row: Record<string, unknown>) {
   return {
     id: row.id,
     customerName: row.customer_name,
     customerPhone: row.customer_phone || undefined,
     city: row.city,
+    state: row.state || undefined,
     productName: row.product_name,
     saleDate: String(row.created_at || "").slice(0, 10),
     saleTime: row.sale_time || (String(row.created_at || "").includes("T") ? String(row.created_at).slice(11, 16) : undefined),
     receivedDate: row.received_date || undefined,
     paymentDate: row.payment_date || undefined,
     quantity: Number(row.quantity),
+    kitQuantity: row.kit_quantity == null ? null : Number(row.kit_quantity),
+    bottleQuantity: row.bottle_quantity == null ? null : Number(row.bottle_quantity),
     totalAmount: Number(row.total_amount),
+    operationCommissionAmount: row.operation_commission_amount == null ? null : Number(row.operation_commission_amount),
+    operationCommissionPercent: row.operation_commission_percent == null ? null : Number(row.operation_commission_percent),
     sellerName: row.seller_name,
+    sellerId: row.seller_id || null,
     salePlatform: row.sale_platform || undefined,
     commissionRate: commissionPercentFromStored(row.commission_rate),
-    commissionAmount: calculateCommission(row.total_amount, row.commission_rate),
+    commissionAmount: row.commission_amount == null ? calculateCommission(row.total_amount, row.commission_rate) : Number(row.commission_amount),
     paymentMethod: row.payment_method,
     paymentStatus: row.payment_status,
     deliveryType: row.delivery_type,
@@ -258,15 +317,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Supabase ainda nao esta configurado no .env.local." }, { status: 503 });
   }
 
-  const body = await request.json().catch(() => null);
-  const normalized = normalizeSale(applySellerScopeToBody(auth.profile, (body ?? {}) as Partial<SaleInput>));
+  const body = (await request.json().catch(() => null) ?? {}) as Partial<SaleInput>;
+  const supabase = getSupabaseServerClient();
+  const resolvedSeller = await resolveOperationalSeller(supabase, auth.profile, body.sellerId);
+  if ("error" in resolvedSeller) return NextResponse.json({ error: resolvedSeller.error }, { status: 409 });
+  const seller = resolvedSeller.seller;
+  const normalized = normalizeSale({
+    ...applySellerScopeToBody(auth.profile, body),
+    sellerId: String(seller.id),
+    sellerName: String(seller.display_name || seller.full_name),
+    commissionRate: seller.is_owner ? 0 : Number(seller.commission_percent || 0)
+  });
 
   if ("error" in normalized) {
     return NextResponse.json({ error: normalized.error }, { status: 400 });
   }
 
-  const supabase = getSupabaseServerClient();
-  let insertPayload: Record<string, unknown> = { ...normalized.sale };
+  const insertPayload: Record<string, unknown> = { ...normalized.sale };
   let { data, error } = await supabase
     .from("sales")
     .insert(insertPayload)
@@ -274,7 +341,11 @@ export async function POST(request: Request) {
     .single();
 
   if (error) {
-    if (isOrderSchemaError(error)) {
+    if (isSellerManagementSchemaError(error)) {
+      return NextResponse.json({ error: "A migration 026 precisa ser aplicada antes de vincular vendedores às vendas." }, { status: 409 });
+    } else if (isSalesEnhancementSchemaError(error)) {
+      return salesEnhancementSchemaErrorResponse();
+    } else if (isOrderSchemaError(error)) {
       const fallbackPayload = removeOrderSchemaFields(insertPayload);
       fallbackPayload.notes = notesWithOrderFallback(normalized.sale.notes, normalized.sale.order_status, normalized.sale.order_tags);
       const fallback = await supabase
@@ -332,11 +403,17 @@ export async function PATCH(request: Request) {
   }
 
   const body = applySellerScopeToBody(auth.profile, (await request.json().catch(() => ({}))) as Partial<SaleInput>);
+  const supabase = getSupabaseServerClient();
   const updates: Record<string, unknown> = {};
 
   if (body.customerName !== undefined) updates.customer_name = cleanText(body.customerName);
   if (body.customerPhone !== undefined) updates.customer_phone = cleanText(body.customerPhone);
   if (body.city !== undefined) updates.city = cleanText(body.city);
+  if (body.state !== undefined) {
+    const state = cleanState(body.state);
+    if (body.state && !state) return NextResponse.json({ error: "Informe uma UF válida com duas letras." }, { status: 400 });
+    updates.state = state;
+  }
   if (body.productName !== undefined) updates.product_name = cleanText(body.productName) || "Produto";
   if (body.saleDate !== undefined || body.saleTime !== undefined) updates.created_at = saleDateToTimestamp(body.saleDate, body.saleTime) || new Date().toISOString();
   if (body.quantity !== undefined) {
@@ -346,12 +423,31 @@ export async function PATCH(request: Request) {
     }
     updates.quantity = quantity;
   }
+  if (body.kitQuantity !== undefined) {
+    const quantity = toOptionalPositiveInteger(body.kitQuantity);
+    if (body.kitQuantity !== null && quantity === null) return NextResponse.json({ error: "Informe uma quantidade de kits válida." }, { status: 400 });
+    updates.kit_quantity = quantity;
+  }
+  if (body.bottleQuantity !== undefined) {
+    const quantity = toOptionalPositiveInteger(body.bottleQuantity);
+    if (body.bottleQuantity !== null && quantity === null) return NextResponse.json({ error: "Informe uma quantidade de frascos válida." }, { status: 400 });
+    updates.bottle_quantity = quantity;
+  }
   if (body.totalAmount !== undefined) {
     const totalAmount = toMoney(body.totalAmount);
     if (!totalAmount) {
       return NextResponse.json({ error: "Informe um valor total valido." }, { status: 400 });
     }
     updates.total_amount = totalAmount;
+  }
+  if (body.operationCommissionAmount !== undefined) {
+    const amount = toOptionalMoney(body.operationCommissionAmount);
+    if (body.operationCommissionAmount !== null && amount === null) return NextResponse.json({ error: "Informe um valor líquido de comissão válido." }, { status: 400 });
+    updates.operation_commission_amount = amount;
+    const total = Number(updates.total_amount ?? body.totalAmount ?? 0);
+    updates.operation_commission_percent = operationCommissionPercent(amount, total, body.operationCommissionPercent);
+  } else if (body.operationCommissionPercent !== undefined) {
+    updates.operation_commission_percent = operationCommissionPercent(null, 0, body.operationCommissionPercent);
   }
   if (body.sellerName !== undefined) {
     const sellerName = cleanText(body.sellerName);
@@ -360,10 +456,14 @@ export async function PATCH(request: Request) {
     }
     updates.seller_name = sellerName;
   }
-  if (body.salePlatform !== undefined) updates.sale_platform = cleanPlatform(body.salePlatform);
-  if (body.commissionRate !== undefined) {
-    updates.commission_rate = normalizeCommissionRate(body.commissionRate, 5);
+  if (body.sellerId !== undefined) {
+    const resolvedSeller = await resolveOperationalSeller(supabase, auth.profile, cleanText(body.sellerId));
+    if ("error" in resolvedSeller) return NextResponse.json({ error: resolvedSeller.error }, { status: 409 });
+    updates.seller_id = resolvedSeller.seller.id;
+    updates.seller_name = resolvedSeller.seller.display_name || resolvedSeller.seller.full_name;
+    updates.commission_rate = resolvedSeller.seller.is_owner ? 0 : Number(resolvedSeller.seller.commission_percent || 0);
   }
+  if (body.salePlatform !== undefined) updates.sale_platform = cleanPlatform(body.salePlatform);
   if (body.paymentMethod !== undefined) updates.payment_method = cleanText(body.paymentMethod) || "PAGAMENTO ANTECIPADO";
   if (body.paymentStatus) updates.payment_status = body.paymentStatus;
   if (body.deliveryType !== undefined) updates.delivery_type = cleanText(body.deliveryType) || "Entrega padrão";
@@ -375,7 +475,7 @@ export async function PATCH(request: Request) {
   if (body.receivedDate !== undefined) updates.received_date = cleanText(body.receivedDate);
   if (body.paymentDate !== undefined) updates.payment_date = cleanText(body.paymentDate);
   if (body.saleTime !== undefined) updates.sale_time = cleanText(body.saleTime);
-  if ((body.paymentStatus === "paid" || body.deliveryStatus === "delivered") && body.paymentDate === undefined) {
+  if (body.paymentStatus === "paid" && body.paymentDate === undefined) {
     // Caixa entra na data em que o cliente pagou, nao na data antiga da venda.
     updates.payment_date = String(new Date().toISOString()).slice(0, 10);
   }
@@ -386,8 +486,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Nenhuma atualizacao enviada." }, { status: 400 });
   }
 
-  const supabase = getSupabaseServerClient();
-  let updatePayload: Record<string, unknown> = { ...updates };
+  const updatePayload: Record<string, unknown> = { ...updates };
   let { data, error } = await supabase
     .from("sales")
     .update(updatePayload)
@@ -396,7 +495,11 @@ export async function PATCH(request: Request) {
     .single();
 
   if (error) {
-    if (isOrderSchemaError(error)) {
+    if (isSellerManagementSchemaError(error)) {
+      return NextResponse.json({ error: "A migration 026 precisa ser aplicada antes de vincular vendedores às vendas." }, { status: 409 });
+    } else if (isSalesEnhancementSchemaError(error)) {
+      return salesEnhancementSchemaErrorResponse();
+    } else if (isOrderSchemaError(error)) {
       const fallbackPayload = removeOrderSchemaFields(updatePayload);
       if (body.orderStatus !== undefined || body.orderTags !== undefined) {
         const current = await supabase.from("sales").select("notes").eq("id", id).single();

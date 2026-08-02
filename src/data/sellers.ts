@@ -1,11 +1,3 @@
-import type { SellerProfile } from "@/data/sales-types";
-
-export const defaultSellers: SellerProfile[] = [
-  { name: "Gabriel Moreira", login: "gabriel", password: "1234", commissionPercent: 5, active: true },
-  { name: "Elisangela", login: "elisangela", password: "1234", commissionPercent: 5, active: true },
-  { name: "Rayany Cristina", login: "rayany", password: "1234", commissionPercent: 15, active: true }
-];
-
 export function normalizeCommissionPercent(value: unknown, fallback = 5) {
   const number = typeof value === "number" ? value : Number(String(value ?? "").replace(",", "."));
   if (!Number.isFinite(number) || number < 0) return fallback;

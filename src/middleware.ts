@@ -79,7 +79,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(salesUrl);
     }
 
-    if (pathname.startsWith("/admin") && !isActiveAdmin) {
+    if ((pathname.startsWith("/admin") || pathname.startsWith("/finance")) && !isActiveAdmin) {
       const salesUrl = request.nextUrl.clone();
       salesUrl.pathname = sellerHomePath;
       salesUrl.search = "";

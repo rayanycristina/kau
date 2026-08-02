@@ -18,8 +18,8 @@ import { TacticalButton } from "@/components/ui/tactical-button";
 import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
 import { useOperationStore } from "@/store/operation-store";
-import type { SaleInput, SaleRecord } from "@/data/sales-types";
-import { commissionPercentToRate, commissionRateToPercent, defaultSellers, normalizeCommissionPercent } from "@/data/sellers";
+import type { SaleInput, SaleRecord, SellerProfile } from "@/data/sales-types";
+import { commissionPercentToRate, commissionRateToPercent, normalizeCommissionPercent } from "@/data/sellers";
 import type { LeadInput, LeadRecord } from "@/data/leads-types";
 
 type DockAction = "ai-call" | "sale" | "call" | "lead" | "message" | "follow-up" | "proposal" | "add";
@@ -133,8 +133,9 @@ const initialSale: SaleInput = {
   productName: "AlphaSin",
   quantity: 1,
   totalAmount: 0,
-  sellerName: "Rayany",
-  commissionRate: commissionPercentToRate(15),
+  sellerName: "Rayany Cristina Feitosa da Silva",
+  sellerId: null,
+  commissionRate: 0,
   paymentMethod: "Pix",
   paymentStatus: "paid",
   deliveryType: "Entrega padrão",
@@ -153,7 +154,7 @@ const initialLead: LeadInput = {
   temperature: "hot",
   contactStatus: "new",
   priority: "high",
-  sellerName: "Gabriel Moreira",
+  sellerName: "Rayany Cristina Feitosa da Silva",
   nextAction: "Qualificar e conduzir para venda AlphaSin",
   nextActionAt: "",
   estimatedValue: 197,
@@ -172,6 +173,7 @@ export function QuickDock() {
   const [activeAction, setActiveAction] = useState<DockAction | null>(null);
   const [completedAction, setCompletedAction] = useState<string | null>(null);
   const [sale, setSale] = useState<SaleInput>(initialSale);
+  const [sellers, setSellers] = useState<SellerProfile[]>([]);
   const [saleError, setSaleError] = useState<string | null>(null);
   const [isSavingSale, setIsSavingSale] = useState(false);
   const [lead, setLead] = useState<LeadInput>(initialLead);
@@ -181,14 +183,27 @@ export function QuickDock() {
   const activeConfig = useMemo(() => (activeAction && activeAction !== "sale" && activeAction !== "lead" ? actionConfig[activeAction] : null), [activeAction]);
 
   useEffect(() => {
+    fetch("/api/sellers?active=true", { cache: "no-store", credentials: "include" })
+      .then((response) => response.ok ? response.json() : { sellers: [] })
+      .then((payload) => {
+        const loaded = (payload.sellers || []) as SellerProfile[];
+        setSellers(loaded);
+        const owner = loaded.find((seller) => seller.isOwner) ?? loaded[0];
+        if (owner && !isSeller) setSale((current) => ({ ...current, sellerId: owner.id, sellerName: owner.name, commissionRate: owner.isOwner ? 0 : commissionPercentToRate(owner.commissionPercent) }));
+      });
+  }, [isSeller]);
+
+  useEffect(() => {
     if (!profile || !isSeller) return;
+    const operationalSeller = sellers.find((seller) => seller.userId === profile.id);
     setSale((current) => ({
       ...current,
+      sellerId: operationalSeller?.id ?? current.sellerId,
       sellerName: profile.sellerDisplayName,
-      commissionRate: commissionPercentToRate(profile.commissionPercent)
+      commissionRate: operationalSeller ? commissionPercentToRate(operationalSeller.commissionPercent) : commissionPercentToRate(profile.commissionPercent)
     }));
     setLead((current) => ({ ...current, sellerName: profile.sellerDisplayName }));
-  }, [profile, isSeller]);
+  }, [profile, isSeller, sellers]);
   const commissionPercent = commissionRateToPercent(Number(sale.commissionRate || 5));
   const commissionPreview = Number.isFinite(Number(sale.totalAmount)) ? Number(sale.totalAmount) * (commissionPercent / 100) : 0;
 
@@ -365,12 +380,12 @@ export function QuickDock() {
                   {isSeller ? (
                     <input className={inputClass} value={sale.sellerName} readOnly />
                   ) : (
-                    <select className={inputClass} value={sale.sellerName} onChange={(e) => {
-                      const seller = defaultSellers.find((item) => item.name === e.target.value);
-                      updateSaleField("sellerName", e.target.value);
-                      if (seller) updateSaleField("commissionRate", commissionPercentToRate(seller.commissionPercent));
+                    <select className={inputClass} value={sale.sellerId || ""} onChange={(e) => {
+                      const seller = sellers.find((item) => item.id === e.target.value);
+                      if (!seller) return;
+                      setSale((current) => ({ ...current, sellerId: seller.id, sellerName: seller.name, commissionRate: seller.isOwner ? 0 : commissionPercentToRate(seller.commissionPercent) }));
                     }}>
-                      {defaultSellers.map((seller) => <option key={seller.login}>{seller.name}</option>)}
+                      <option value="" disabled>Selecione</option>{sellers.map((seller) => <option key={seller.id} value={seller.id}>{seller.fullName || seller.name}</option>)}
                     </select>
                   )}
                 </div>

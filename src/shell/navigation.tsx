@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Bot, ChevronLeft, CircleDollarSign, Gauge, Home, LogOut, MessagesSquare, PhoneCall, Settings, ShieldAlert, ShoppingCart, Swords, Target, TimerReset, Trophy, UserCog, UsersRound } from "lucide-react";
+import { BarChart3, Bot, ChevronLeft, CircleDollarSign, Gauge, Home, LogOut, MessagesSquare, PhoneCall, ReceiptText, Settings, ShieldAlert, ShoppingCart, Swords, Target, TimerReset, Trophy, UserCog, UsersRound } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -12,6 +12,7 @@ const baseItems = [
   { label: "Live Calls", href: "/live-calls", icon: PhoneCall, badge: "AO VIVO", sub: "3 chamadas" },
   { label: "Leads", href: "/pipeline", icon: Target, count: "342", sub: "17 quentes" },
   { label: "Vendas", href: "/sales", icon: ShoppingCart, sub: "registro + comissão" },
+  { label: "Financeiro", href: "/finance/expenses", icon: ReceiptText, sub: "Despesas", adminOnly: true },
   { label: "Sales Command", href: "/sales-command", icon: MessagesSquare, badge: "NOVO", sub: "fechamento" },
   { label: "Equipe / Vendedores", href: "/team", icon: UsersRound, sub: "comissões", adminOnly: true },
   { label: "Follow-up", href: "/follow-up", icon: TimerReset, count: "27", alert: true, sub: "R$ 4.250" },
@@ -26,7 +27,7 @@ const baseItems = [
 
 export function Navigation() {
   const pathname = usePathname();
-  const { profile, isAdmin, signOut } = useAuth();
+  const { profile, isLoading, isAdmin, signOut } = useAuth();
   const items = isAdmin ? baseItems : baseItems.filter((item) => item.href === "/sales");
   const initials = profile?.fullName
     ? profile.fullName
@@ -49,7 +50,31 @@ export function Navigation() {
 
       <nav className="space-y-2">
         {items.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+          const active = item.href === "/" ? pathname === "/" : item.label === "Financeiro" ? pathname.startsWith("/finance/") : pathname.startsWith(item.href);
+          if (item.label === "Financeiro") {
+            return (
+              <div key={item.label} className={cn("rounded-2xl border px-2 py-2", active ? "border-money/20 bg-money/[.055]" : "border-white/[.07] bg-white/[.018]")}>
+                <div className="flex items-center gap-2.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-[.12em] text-white/45">
+                  <item.icon size={15} className={active ? "text-money" : "text-white/38"} />
+                  <span>Financeiro</span>
+                </div>
+                <Link
+                  href={item.href}
+                  className={cn(
+                    "mt-1 flex min-h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition",
+                    active ? "border-money/20 bg-money/10 text-money" : "border-transparent text-white/60 hover:bg-white/[.04] hover:text-white"
+                  )}
+                >
+                  <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-money" : "bg-white/25")} />
+                  Despesas
+                </Link>
+                <Link href="/finance/guarantees" className={cn("mt-1 flex min-h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition", pathname.startsWith("/finance/guarantees") ? "border-money/20 bg-money/10 text-money" : "border-transparent text-white/60 hover:bg-white/[.04] hover:text-white")}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full", pathname.startsWith("/finance/guarantees") ? "bg-money" : "bg-white/25")} />
+                  Garantias pós-pagas
+                </Link>
+              </div>
+            );
+          }
           return (
             <motion.div key={item.label} whileHover={{ x: 4, scale: 1.008 }} whileTap={{ scale: 0.985 }}>
               <Link
@@ -80,8 +105,7 @@ export function Navigation() {
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-amber/40 to-purple/30 text-sm font-black">{initials}</div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold">{profile?.fullName || "Carregando..."}</p>
-              <p className="text-xs text-white/50">{profile?.role === "admin" ? "Administradora" : "Vendedora"}</p>
+              {isLoading && !profile ? <><div className="h-3.5 w-28 animate-pulse rounded-full bg-white/12" /><div className="mt-2 h-2.5 w-20 animate-pulse rounded-full bg-white/[.07]" /></> : <><p className="truncate text-sm font-bold">{profile?.fullName || "Usuário"}</p><p className="text-xs text-white/50">{profile?.role === "admin" ? "Administradora" : "Vendedora"}</p></>}
             </div>
           </div>
           <div className="mt-4 flex items-center justify-between rounded-xl border border-purple/30 bg-purple/15 px-3 py-2 text-xs font-bold uppercase text-purple">

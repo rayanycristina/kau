@@ -3,17 +3,19 @@ import { activeOpportunities, dailyRevenue, revenueAtRisk, teamConversion } from
 import type { SaleRecord, SalesSummary } from "@/data/sales-types";
 import { getSaleFinancialState } from "@/data/sale-financial-state";
 
-function isOwnerSeller(name?: string) {
-  return String(name || "").toLowerCase().includes("rayany");
-}
-
 function ownerCommissionForSale(sale: SaleRecord) {
-  const percent = isOwnerSeller(sale.sellerName) ? (sale.commissionRate || 15) : 10;
-  return Math.round((sale.totalAmount || 0) * (percent / 100) * 100) / 100;
+  if (sale.operationCommissionAmount != null && Number.isFinite(sale.operationCommissionAmount)) {
+    return Math.round(sale.operationCommissionAmount * 100) / 100;
+  }
+  if (sale.operationCommissionPercent != null && Number.isFinite(sale.operationCommissionPercent)) {
+    return Math.round((sale.totalAmount || 0) * (sale.operationCommissionPercent / 100) * 100) / 100;
+  }
+  return 0;
 }
 
 function subCommissionForSale(sale: SaleRecord) {
-  return isOwnerSeller(sale.sellerName) ? 0 : sale.commissionAmount;
+  const amount = Number(sale.commissionAmount);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0;
 }
 
 type OperationState = {

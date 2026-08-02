@@ -5,25 +5,39 @@ export type OrderTag = "hot_customer" | "cold_customer" | "rescheduled" | "frust
 export type SalesPlatformId = "payt" | "coinzz" | "logzz";
 
 export type SellerProfile = {
+  id?: string;
+  userId?: string | null;
+  fullName?: string;
+  displayName?: string | null;
   name: string;
   login: string;
-  password?: string;
+  email?: string | null;
+  phone?: string | null;
   commissionPercent: number;
   active?: boolean;
+  isOwner?: boolean;
+  salesCount?: number;
+  salesTotal?: number;
 };
 
 export type SaleInput = {
   customerName: string;
   customerPhone?: string;
   city: string;
+  state?: string;
   productName: string;
   saleDate?: string;
   saleTime?: string;
   receivedDate?: string;
   paymentDate?: string;
   quantity: number;
+  kitQuantity?: number | null;
+  bottleQuantity?: number | null;
   totalAmount: number;
+  operationCommissionAmount?: number | null;
+  operationCommissionPercent?: number | null;
   sellerName: string;
+  sellerId?: string | null;
   salePlatform?: SalesPlatformId | string;
   commissionRate?: number;
   paymentMethod: string;
