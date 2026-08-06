@@ -118,7 +118,7 @@ function loadCoreSalesData(force = false) {
   return pendingCoreSalesRequest;
 }
 
-type GuaranteeDraft = { guaranteeType: GuaranteeType; guaranteeAmount: string; paid: boolean; setupRequired: boolean };
+type GuaranteeDraft = { guaranteeType: GuaranteeType; guaranteeAmount: string; paid: boolean; setupRequired: boolean; existing: boolean };
 
 type CashMovementRow = {
   id: string;
@@ -363,7 +363,7 @@ function formFromSaleRecord(item: SaleRecord): SaleForm {
     sellerName: item.sellerName,
     commissionPercent: String(item.commissionRate ?? 0),
     saleType,
-    salePlatform: (item.salePlatform as SalesPlatformId) || "",
+    salePlatform: getSalesPlatform(item.salePlatform)?.id || "",
     paymentMethod: item.paymentMethod || (saleType === "advance" ? "PAGAMENTO ANTECIPADO" : saleType.toUpperCase()),
     saleDate: item.saleDate || String(item.createdAt || "").slice(0, 10) || todayKey(),
     saleTime: item.saleTime || (String(item.createdAt || "").includes("T") ? String(item.createdAt).slice(11, 16) : ""),
@@ -500,7 +500,7 @@ export function SalesDashboardScreen() {
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("create");
   const [editingSale, setEditingSale] = useState<SaleRecord | null>(null);
   const [isSaleDrawerOpen, setIsSaleDrawerOpen] = useState(false);
-  const [guaranteeDraft, setGuaranteeDraft] = useState<GuaranteeDraft>({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: false });
+  const [guaranteeDraft, setGuaranteeDraft] = useState<GuaranteeDraft>({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: false, existing: false });
   const [deleteCandidate, setDeleteCandidate] = useState<SaleRecord | null>(null);
   const [isWithdrawalDrawerOpen, setIsWithdrawalDrawerOpen] = useState(false);
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>({ amount: "", withdrawnAt: todayKey(), note: "" });
@@ -936,7 +936,12 @@ export function SalesDashboardScreen() {
   function selectPlatform(platformId: SalesPlatformId) {
     const platform = getSalesPlatform(platformId);
     if (!platform) return;
+    if (editingSale && guaranteeDraft.existing && sale.salePlatform === "coinzz" && platformId !== "coinzz") {
+      setToast({ title: "Garantia preservada", message: "Esta venda já possui Garantia Coinzz. A plataforma não foi alterada para evitar modificar o vínculo histórico.", tone: "amber" });
+      return;
+    }
     setSale((current) => ({ ...current, salePlatform: platformId }));
+    if (platformId !== "coinzz") setGuaranteeDraft({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: false, existing: false });
   }
 
   function selectSellerById(id: string) {
@@ -952,9 +957,9 @@ export function SalesDashboardScreen() {
       const payload = await response.json();
       const existing = payload.guarantees?.[0];
       const activeSetting = payload.settings?.find((item: { platform: string; paymentMode: string; isActive: boolean }) => item.platform.toLowerCase() === "coinzz" && item.paymentMode.toUpperCase() === "PAD" && item.isActive);
-      setGuaranteeDraft({ guaranteeType: existing?.guaranteeType || "conditional", guaranteeAmount: String(existing?.guaranteeAmount || activeSetting?.defaultAmount || ""), paid: existing?.status === "paid", setupRequired: Boolean(payload.setupRequired) });
+      setGuaranteeDraft({ guaranteeType: existing?.guaranteeType || "conditional", guaranteeAmount: String(existing?.guaranteeAmount || activeSetting?.defaultAmount || ""), paid: existing?.status === "paid", setupRequired: Boolean(payload.setupRequired), existing: Boolean(existing) });
     } catch {
-      setGuaranteeDraft({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: true });
+      setGuaranteeDraft({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: true, existing: false });
     }
   }
 
@@ -1391,7 +1396,7 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
 
       <div className="space-y-2">
         <p className={labelClass}>Plataforma da venda</p>
-        <div className="grid gap-2 md:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2">
           {salesPlatforms.map((platform) => <PlatformButton key={platform.id} platformId={platform.id} active={sale.salePlatform === platform.id} onClick={() => onPlatformChange(platform.id)} />)}
         </div>
         <p className="text-[11px] font-semibold text-white/42">A plataforma mostra a origem da venda. A modalidade continua sendo definida acima: PAD, COD ou Pagamento Antecipado.</p>
@@ -1828,7 +1833,7 @@ function PlatformButton({ platformId, active, onClick }: { platformId: SalesPlat
   const platform = getSalesPlatform(platformId);
   if (!platform) return null;
   return <button type="button" onClick={onClick} className={cn("group flex min-h-[72px] items-center gap-3 rounded-2xl border px-3 py-3 text-left transition hover:-translate-y-0.5", active ? platform.accentClass + " shadow-[0_0_35px_rgba(255,255,255,.04)]" : "border-white/10 bg-white/[.03] text-white/72 hover:bg-white/[.055] hover:text-white")}>
-    <span className="grid h-11 w-16 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/95 px-2"><img src={platform.logoSrc} alt={platform.name} className="max-h-8 max-w-full object-contain" /></span>
+    <span className={cn("grid h-11 w-16 shrink-0 place-items-center rounded-xl border border-white/10 px-2", platform.id === "manual" ? "bg-[#02081c]" : platform.logoSrc ? "bg-white/95" : "bg-slate-300/[.07] text-slate-300")} >{platform.logoSrc ? <img src={platform.logoSrc} alt={platform.name} className="max-h-8 max-w-full object-contain" /> : <ClipboardList size={22} aria-hidden />}</span>
     <span className="min-w-0"><span className="block text-sm font-black">{platform.name}</span><span className="mt-0.5 block text-[11px] font-semibold text-white/55">{platform.description}</span></span>
   </button>;
 }
@@ -1844,8 +1849,8 @@ function PlatformTag({ platformId, fallback }: { platformId?: string; fallback?:
       )}
       title={platform.name}
     >
-      <span className="grid h-6 w-10 shrink-0 place-items-center rounded-md border border-white/10 bg-white/95 px-1.5 shadow-[0_6px_18px_rgba(0,0,0,.22)]">
-        <img src={platform.logoSrc} alt={platform.name} className="max-h-4 max-w-full object-contain" />
+      <span className={cn("grid h-6 w-10 shrink-0 place-items-center rounded-md border border-white/10 px-1.5 shadow-[0_6px_18px_rgba(0,0,0,.22)]", platform.id === "manual" ? "bg-[#02081c]" : platform.logoSrc ? "bg-white/95" : "bg-slate-300/[.07]")}>
+        {platform.logoSrc ? <img src={platform.logoSrc} alt={platform.name} className="max-h-4 max-w-full object-contain" /> : <ClipboardList size={13} aria-hidden />}
       </span>
       <span className="hidden sm:inline">{platform.name}</span>
     </span>
@@ -1857,8 +1862,8 @@ function PlatformMini({ platformId }: { platformId?: string }) {
   if (!platform) return null;
   return (
     <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-1.5 py-1 text-[9px] font-semibold uppercase", platform.accentClass)} title={platform.name}>
-      <span className="grid h-5 w-8 shrink-0 place-items-center rounded-md bg-white/95 px-1">
-        <img src={platform.logoSrc} alt={platform.name} className="max-h-3.5 max-w-full object-contain" />
+      <span className={cn("grid h-5 w-8 shrink-0 place-items-center rounded-md px-1", platform.id === "manual" ? "bg-[#02081c]" : platform.logoSrc ? "bg-white/95" : "bg-slate-300/[.07]")}>
+        {platform.logoSrc ? <img src={platform.logoSrc} alt={platform.name} className="max-h-3.5 max-w-full object-contain" /> : <ClipboardList size={11} aria-hidden />}
       </span>
       <span className="hidden sm:inline">{platform.name}</span>
     </span>

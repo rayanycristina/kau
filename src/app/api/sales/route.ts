@@ -36,7 +36,7 @@ function cleanText(value: unknown) {
 
 function cleanPlatform(value: unknown) {
   const platform = String(value || "").toLowerCase().trim();
-  return ["payt", "coinzz", "logzz"].includes(platform) ? platform : null;
+  return ["payt", "coinzz", "logzz", "manual"].includes(platform) ? platform : null;
 }
 
 const orderStatusValues = ["active", "cancelled", "returned", "lost", "review"];
@@ -116,6 +116,7 @@ function platformName(value: unknown) {
   if (platform === "payt") return "Payt";
   if (platform === "coinzz") return "Coinzz";
   if (platform === "logzz") return "Logzz";
+  if (platform === "manual") return "Venda Manual";
   return null;
 }
 
@@ -169,6 +170,10 @@ function isSalesEnhancementSchemaError(error: { message?: string } | null | unde
 
 function isSellerManagementSchemaError(error: { message?: string } | null | undefined) {
   return /seller_id|public\.sellers|relation ['"]?sellers/i.test(String(error?.message || ""));
+}
+
+function isSalesPlatformConstraintError(error: { message?: string } | null | undefined) {
+  return /sales_sale_platform_check|sale_platform.*check constraint/i.test(String(error?.message || ""));
 }
 
 async function resolveOperationalSeller(supabase: ReturnType<typeof getSupabaseServerClient>, profile: UserProfile, sellerId?: string | null) {
@@ -343,6 +348,8 @@ export async function POST(request: Request) {
   if (error) {
     if (isSellerManagementSchemaError(error)) {
       return NextResponse.json({ error: "A migration 026 precisa ser aplicada antes de vincular vendedores às vendas." }, { status: 409 });
+    } else if (isSalesPlatformConstraintError(error)) {
+      return NextResponse.json({ error: "A migration 029 precisa ser aplicada antes de usar Venda Manual." }, { status: 409 });
     } else if (isSalesEnhancementSchemaError(error)) {
       return salesEnhancementSchemaErrorResponse();
     } else if (isOrderSchemaError(error)) {
@@ -497,6 +504,8 @@ export async function PATCH(request: Request) {
   if (error) {
     if (isSellerManagementSchemaError(error)) {
       return NextResponse.json({ error: "A migration 026 precisa ser aplicada antes de vincular vendedores às vendas." }, { status: 409 });
+    } else if (isSalesPlatformConstraintError(error)) {
+      return NextResponse.json({ error: "A migration 029 precisa ser aplicada antes de usar Venda Manual." }, { status: 409 });
     } else if (isSalesEnhancementSchemaError(error)) {
       return salesEnhancementSchemaErrorResponse();
     } else if (isOrderSchemaError(error)) {

@@ -1,8 +1,8 @@
-export type SalesPlatformId = "payt" | "coinzz" | "logzz";
+export type SalesPlatformId = "payt" | "coinzz" | "logzz" | "manual";
 export type SalesPlatform = {
   id: SalesPlatformId;
   name: string;
-  logoSrc: string;
+  logoSrc?: string;
   color: string;
   accentClass: string;
   description: string;
@@ -32,6 +32,14 @@ export const salesPlatforms: SalesPlatform[] = [
     color: "#22c55e",
     accentClass: "border-[#22c55e]/35 bg-[#22c55e]/10 text-[#86efac]",
     description: "Origem Logzz · modalidade definida acima"
+  },
+  {
+    id: "manual",
+    name: "Venda Manual",
+    logoSrc: "/platforms/kau-manual.png",
+    color: "#94a3b8",
+    accentClass: "border-slate-300/30 bg-slate-300/[.08] text-slate-200",
+    description: "Venda registrada fora das plataformas integradas."
   }
 ];
 

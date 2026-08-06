@@ -2,7 +2,7 @@ export type PaymentStatus = "paid" | "pending" | "cod";
 export type DeliveryStatus = "pending" | "scheduled" | "delivered" | "risk" | "rescheduled";
 export type OrderStatus = "active" | "cancelled" | "returned" | "lost" | "review";
 export type OrderTag = "hot_customer" | "cold_customer" | "rescheduled" | "frustrated" | "fraud" | "defaulted" | "priority";
-export type SalesPlatformId = "payt" | "coinzz" | "logzz";
+export type SalesPlatformId = "payt" | "coinzz" | "logzz" | "manual";
 
 export type SellerProfile = {
   id?: string;
