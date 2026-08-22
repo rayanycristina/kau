@@ -19,6 +19,10 @@ function isSetupError(error: { message?: string; code?: string } | null) {
   return /sellers|seller_id|schema cache|does not exist|could not find/i.test(`${error?.code || ""} ${error?.message || ""}`);
 }
 
+function softDeleteSchemaMissing(error: { code?: string; message?: string } | null) {
+  return ["42703", "PGRST204"].includes(String(error?.code || "")) || /deleted_at/i.test(String(error?.message || ""));
+}
+
 function mapSeller(row: Record<string, unknown>, metrics?: { count: number; total: number }) {
   const fullName = String(row.full_name || "");
   const displayName = row.display_name ? String(row.display_name) : null;
@@ -56,7 +60,11 @@ export async function GET(request: Request) {
 
   const metrics = new Map<string, { count: number; total: number }>();
   if (isAdmin(auth.profile)) {
-    const { data: sales } = await admin.from("sales").select("seller_id,total_amount").not("seller_id", "is", null);
+    let salesResult = await admin.from("sales").select("seller_id,total_amount").is("deleted_at", null).not("seller_id", "is", null);
+    if (salesResult.error && softDeleteSchemaMissing(salesResult.error)) {
+      salesResult = await admin.from("sales").select("seller_id,total_amount").not("seller_id", "is", null);
+    }
+    const sales = salesResult.data;
     for (const sale of sales ?? []) {
       const id = String(sale.seller_id || "");
       const current = metrics.get(id) ?? { count: 0, total: 0 };

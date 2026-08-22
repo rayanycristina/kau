@@ -7,6 +7,10 @@ export const dynamic = "force-dynamic";
 
 type WithdrawalScope = "admin" | "seller";
 
+function softDeleteSchemaMissing(error: { code?: string; message?: string } | null) {
+  return ["42703", "PGRST204"].includes(String(error?.code || "")) || /deleted_at/i.test(String(error?.message || ""));
+}
+
 function toMoney(value: unknown) {
   const number =
     typeof value === "number"
@@ -73,10 +77,17 @@ function saleIdsFromWithdrawal(row: CashWithdrawalRow) {
 async function sellerSaleIdSet(profile: UserProfile) {
   const supabase = getSupabaseServerClient();
 
-  const { data, error } = await supabase
+  const result = await supabase
     .from("sales")
     .select("id")
+    .is("deleted_at", null)
     .eq("seller_name", profile.sellerDisplayName);
+
+  if (result.error && softDeleteSchemaMissing(result.error)) {
+    throw new Error("O campo deleted_at é necessário para vincular saques a vendas operacionais.");
+  }
+
+  const { data, error } = result;
 
   if (error) throw error;
 
@@ -88,10 +99,17 @@ async function validateSaleIdsForProfile(profile: UserProfile, saleIds: string[]
 
   const supabase = getSupabaseServerClient();
 
-  const { data, error } = await supabase
+  const result = await supabase
     .from("sales")
     .select("id,seller_name")
+    .is("deleted_at", null)
     .in("id", saleIds);
+
+  if (result.error && softDeleteSchemaMissing(result.error)) {
+    return { saleIds: [], error: "O campo deleted_at é necessário para validar vendas operacionais.", status: 409 };
+  }
+
+  const { data, error } = result;
 
   if (error) return { saleIds: [], error: error.message, status: 500 };
 

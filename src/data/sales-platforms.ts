@@ -37,8 +37,8 @@ export const salesPlatforms: SalesPlatform[] = [
     id: "manual",
     name: "Venda Manual",
     logoSrc: "/platforms/kau-manual.png",
-    color: "#94a3b8",
-    accentClass: "border-slate-300/30 bg-slate-300/[.08] text-slate-200",
+    color: "#37e699",
+    accentClass: "border-money/45 bg-money/[.11] text-money shadow-[0_0_0_1px_rgba(55,230,153,.05),0_12px_32px_rgba(3,38,24,.24)]",
     description: "Venda registrada fora das plataformas integradas."
   }
 ];

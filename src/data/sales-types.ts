@@ -39,6 +39,11 @@ export type SaleInput = {
   sellerName: string;
   sellerId?: string | null;
   salePlatform?: SalesPlatformId | string;
+  productId?: string | null;
+  productKitId?: string | null;
+  productQuantity?: number | null;
+  manualShippingAmount?: number | null;
+  campaignId?: string | null;
   commissionRate?: number;
   paymentMethod: string;
   paymentStatus: PaymentStatus;
@@ -56,6 +61,10 @@ export type SaleRecord = SaleInput & {
   commissionRate: number;
   commissionAmount: number;
   saleDate?: string;
+  deletedAt?: string;
+  deletedBy?: string;
+  unitCostSnapshot?: number | null;
+  totalProductCostSnapshot?: number | null;
   createdAt: string;
   updatedAt?: string;
 };

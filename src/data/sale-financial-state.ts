@@ -1,4 +1,4 @@
-import type { OrderStatus, SaleRecord } from "@/data/sales-types";
+import type { OrderStatus } from "@/data/sales-types";
 
 export type SaleVisualStatus = "LIBERADO" | "PENDENTE" | "CANCELADO" | "DEVOLVIDO" | "PERDIDO" | "EM ANÁLISE";
 export type SaleBadgeVariant = "released" | "pending" | "cancelled" | "returned" | "lost" | "review";
@@ -15,11 +15,22 @@ export type SaleFinancialState = {
   badgeVariant: SaleBadgeVariant;
 };
 
-type SaleStateInput = Partial<Pick<SaleRecord, "orderStatus" | "paymentStatus" | "deliveryStatus" | "deliveryType" | "paymentMethod">> & {
+type SaleStateInput = {
+  orderStatus?: OrderStatus | string | null;
+  paymentStatus?: string | null;
+  deliveryStatus?: string | null;
+  deliveryType?: string | null;
+  paymentMethod?: string | null;
+  receivedDate?: string | null;
+  deletedAt?: string | null;
   order_status?: string | null;
   status_pedido?: string | null;
   payment_status?: string | null;
   delivery_status?: string | null;
+  received_date?: string | null;
+  deliveryDate?: string | null;
+  delivery_date?: string | null;
+  deleted_at?: string | null;
   delivery_type?: string | null;
   payment_method?: string | null;
   notes?: string | null;
@@ -45,6 +56,19 @@ export function getOrderStatusFromSale(sale: SaleStateInput): OrderStatus {
 
 export function isPaymentConfirmed(sale: SaleStateInput): boolean {
   return String(sale.paymentStatus || sale.payment_status || "").trim().toLowerCase() === "paid";
+}
+
+export const isSalePaid = isPaymentConfirmed;
+
+export function isSaleDelivered(sale: SaleStateInput): boolean {
+  const deliveryStatus = String(sale.deliveryStatus || sale.delivery_status || "").trim().toLowerCase();
+  const deliveryDate = String(sale.receivedDate || sale.received_date || sale.deliveryDate || sale.delivery_date || "").trim();
+  return deliveryStatus === "delivered" || /^\d{4}-\d{2}-\d{2}/.test(deliveryDate);
+}
+
+export function isOperationalSale(sale: SaleStateInput): boolean {
+  const deletedAt = String(sale.deletedAt || sale.deleted_at || "").trim();
+  return !deletedAt && getOrderStatusFromSale(sale) === "active";
 }
 
 export function getSaleFinancialState(sale: SaleStateInput): SaleFinancialState {

@@ -5,6 +5,10 @@ import { getSaleFinancialState, getOrderStatusFromSale } from "@/data/sale-finan
 
 export const dynamic = "force-dynamic";
 
+function softDeleteSchemaMissing(error: { code?: string; message?: string } | null) {
+  return ["42703", "PGRST204"].includes(String(error?.code || "")) || /deleted_at/i.test(String(error?.message || ""));
+}
+
 function commissionPercentFromStored(value: unknown) {
   const number = Number(value || 0);
   if (!Number.isFinite(number) || number < 0) return 0;
@@ -93,11 +97,15 @@ export async function GET() {
 
   const supabase = getSupabaseServerClient();
   const today = new Date().toISOString().slice(0, 10);
-  let query = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+  let query = supabase.from("sales").select("*").is("deleted_at", null).order("created_at", { ascending: false }).limit(500);
   if (isSeller(auth.profile)) {
     query = query.eq("seller_name", auth.profile.sellerDisplayName);
   }
   const { data, error } = await query;
+
+  if (error && softDeleteSchemaMissing(error)) {
+    return NextResponse.json({ configured: true, error: "O campo deleted_at é necessário para calcular o resumo com segurança." }, { status: 409 });
+  }
 
   if (error) {
     return NextResponse.json({ configured: true, error: error.message }, { status: 500 });

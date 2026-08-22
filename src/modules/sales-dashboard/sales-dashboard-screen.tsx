@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import Link from "next/link";
 import {
   Activity,
   AlertTriangle,
@@ -11,6 +12,7 @@ import {
   ClipboardList,
   Clock3,
   Eye,
+  PackageOpen,
   PanelRightOpen,
   Plus,
   RefreshCw,
@@ -18,6 +20,7 @@ import {
   Search,
   ReceiptText,
   Trash2,
+  Truck,
   WalletCards,
   X
 } from "lucide-react";
@@ -30,6 +33,9 @@ import type { DeliveryStatus, OrderStatus, OrderTag, PaymentStatus, SaleInput, S
 import { getSaleFinancialState, isValidSaleForMetrics, normalizeOrderStatus as normalizeOrderStatusCentral, saleVisualStatusLabel } from "@/data/sale-financial-state";
 import type { GuaranteeType } from "@/data/guarantee-types";
 import { formatMoneyInput, moneyFromCents, moneyToCents } from "@/data/money";
+import type { Campaign } from "@/data/campaign-types";
+import type { Product } from "@/data/product-types";
+import type { ManualSaleCostObligation } from "@/data/manual-sale-cost-types";
 
 const inputClass = "w-full rounded-2xl border border-slate-400/[.115] bg-[#060A11]/88 px-3.5 py-3 text-sm font-medium tracking-[-.012em] text-slate-100 outline-none shadow-[inset_0_1px_0_rgba(255,255,255,.035)] transition duration-[180ms] ease-out placeholder:text-slate-500 hover:border-slate-300/[.16] hover:bg-[#090F18]/92 focus:border-cyan/35 focus:bg-cyan/[.025] focus:shadow-[0_0_0_3px_rgba(24,215,255,.055),inset_0_1px_0_rgba(255,255,255,.05)] [color-scheme:dark] [&_option]:bg-[#050912] [&_option]:text-slate-100";
 const labelClass = "mb-2 block text-[10px] font-medium uppercase tracking-[.14em] text-slate-400/68";
@@ -43,7 +49,7 @@ type MovementHistoryScope = "period" | "all";
 type DrawerMode = "create" | "edit";
 type PeriodMode = "today" | "3d" | "7d" | "30d" | "custom";
 
-type SaleForm = Omit<SaleInput, "productName" | "quantity" | "kitQuantity" | "bottleQuantity" | "totalAmount" | "operationCommissionAmount"> & {
+type SaleForm = Omit<SaleInput, "productName" | "quantity" | "kitQuantity" | "bottleQuantity" | "totalAmount" | "operationCommissionAmount" | "productId" | "productKitId" | "productQuantity" | "manualShippingAmount"> & {
   legacyQuantity?: number;
   kitQuantity: string;
   bottleQuantity: string;
@@ -54,6 +60,10 @@ type SaleForm = Omit<SaleInput, "productName" | "quantity" | "kitQuantity" | "bo
   commissionPercent: string;
   saleType: SaleType;
   salePlatform: SalesPlatformId | "";
+  productId: string;
+  productKitId: string;
+  productQuantity: string;
+  manualShippingAmount: string;
 };
 
 type ToastState = {
@@ -101,7 +111,7 @@ function loadCoreSalesData(force = false) {
   if (pendingCoreSalesRequest) return pendingCoreSalesRequest;
 
   pendingCoreSalesRequest = Promise.allSettled([
-    fetchDashboardResource<SaleRecord[]>("/api/sales", "sales", "Erro ao carregar vendas."),
+    fetchDashboardResource<SaleRecord[]>("/api/sales?includeDeleted=financial", "sales", "Erro ao carregar vendas."),
     fetchDashboardResource<CashWithdrawal[]>("/api/cash-withdrawals", "withdrawals", "Erro ao carregar saques.")
   ]).then(([salesResult, withdrawalsResult]) => {
     const result: CoreSalesLoadResult = { errors: [] };
@@ -153,6 +163,11 @@ const initialSaleForm: SaleForm = {
   commissionPercent: "0",
   saleType: "pad",
   salePlatform: "",
+  productId: "",
+  productKitId: "",
+  productQuantity: "",
+  manualShippingAmount: "",
+  campaignId: null,
   paymentMethod: "PAD",
   paymentStatus: "pending",
   saleDate: todayKey(),
@@ -364,14 +379,19 @@ function formFromSaleRecord(item: SaleRecord): SaleForm {
     commissionPercent: String(item.commissionRate ?? 0),
     saleType,
     salePlatform: getSalesPlatform(item.salePlatform)?.id || "",
+    productId: item.productId || "",
+    productKitId: item.productKitId || "",
+    productQuantity: item.productQuantity == null ? "" : String(item.productQuantity),
+    manualShippingAmount: item.manualShippingAmount == null ? "" : formatMoneyInput(moneyToCents(item.manualShippingAmount)),
+    campaignId: item.campaignId || null,
     paymentMethod: item.paymentMethod || (saleType === "advance" ? "PAGAMENTO ANTECIPADO" : saleType.toUpperCase()),
     saleDate: item.saleDate || String(item.createdAt || "").slice(0, 10) || todayKey(),
     saleTime: item.saleTime || (String(item.createdAt || "").includes("T") ? String(item.createdAt).slice(11, 16) : ""),
     receivedDate: item.receivedDate || "",
-    paymentDate: item.paymentDate || (item.paymentStatus === "paid" ? item.expectedPaymentDate || item.saleDate || String(item.createdAt || "").slice(0, 10) : ""),
+    paymentDate: item.paymentDate || "",
     paymentStatus: item.paymentStatus,
     deliveryType: item.deliveryType || (saleType === "pad" ? "PAD - Correios" : saleType === "cod" ? "COD - Motoboy" : "PAGAMENTO ANTECIPADO"),
-    deliveryStatus: item.deliveryStatus,
+    deliveryStatus: item.receivedDate ? "delivered" : item.deliveryStatus,
     orderStatus: normalizeOrderStatus(item.orderStatus),
     orderTags: item.orderTags || [],
     orderStatusNote: item.orderStatusNote || "",
@@ -502,6 +522,9 @@ export function SalesDashboardScreen() {
   const [isSaleDrawerOpen, setIsSaleDrawerOpen] = useState(false);
   const [guaranteeDraft, setGuaranteeDraft] = useState<GuaranteeDraft>({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: false, existing: false });
   const [deleteCandidate, setDeleteCandidate] = useState<SaleRecord | null>(null);
+  const [isDeletingSale, setIsDeletingSale] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteInFlightRef = useRef(false);
   const [isWithdrawalDrawerOpen, setIsWithdrawalDrawerOpen] = useState(false);
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>({ amount: "", withdrawnAt: todayKey(), note: "" });
   const [isWithdrawalSaving, setIsWithdrawalSaving] = useState(false);
@@ -522,6 +545,7 @@ export function SalesDashboardScreen() {
       })
       .catch((sellerError) => setError(sellerError instanceof Error ? sellerError.message : "Erro ao carregar vendedores."));
   }, []);
+
 
   useEffect(() => {
     if (isAdmin) {
@@ -570,7 +594,8 @@ export function SalesDashboardScreen() {
     return 0;
   }, [financialPreviewTotal, isSaleFormFinanciallyBlocked, sale.operationCommissionAmount, sale.operationCommissionAmountCents, sale.operationCommissionPercent]);
 
-  const sellersForFilter = useMemo(() => Array.from(new Set([...sellers.map((seller) => seller.name), ...sales.map((item) => item.sellerName).filter(Boolean)])).sort(), [sales, sellers]);
+  const activeSales = useMemo(() => sales.filter((item) => !item.deletedAt), [sales]);
+  const sellersForFilter = useMemo(() => Array.from(new Set([...sellers.map((seller) => seller.name), ...activeSales.map((item) => item.sellerName).filter(Boolean)])).sort(), [activeSales, sellers]);
 
   const activePeriod = useMemo(() => periodRange(periodMode, dashboardDate, customStartDate, customEndDate), [periodMode, dashboardDate, customStartDate, customEndDate]);
   const activePeriodLabel = useMemo(() => periodLabel(periodMode, activePeriod.start, activePeriod.end), [periodMode, activePeriod.start, activePeriod.end]);
@@ -609,7 +634,7 @@ export function SalesDashboardScreen() {
   }, [activePeriod.end, activePeriod.start, isAdmin, isAuthLoading]);
 
   const registeredMovementRows = useMemo(() => {
-    return sales.filter((item) => {
+    return activeSales.filter((item) => {
       const saleDateMatch = isDateInRange(item.saleDate || String(item.createdAt || "").slice(0, 10), activePeriod.start, activePeriod.end);
       if (!saleDateMatch) return false;
       if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
@@ -617,7 +642,7 @@ export function SalesDashboardScreen() {
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     });
-  }, [sales, activePeriod.start, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
+  }, [activeSales, activePeriod.start, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
 
   const filteredByDate = useMemo(() => {
     return registeredMovementRows.filter((item) => getSaleFinancialState(item).countsRevenue);
@@ -635,24 +660,25 @@ export function SalesDashboardScreen() {
     }).sort((a, b) => String(cashDateForSale(b) || "").localeCompare(String(cashDateForSale(a) || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }, [sales, activePeriod.start, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
 
-  const movementItems = movementView === "cash" ? confirmedCashRows : registeredMovementRows;
+  const operationalConfirmedCashRows = useMemo(() => confirmedCashRows.filter((item) => !item.deletedAt), [confirmedCashRows]);
+  const movementItems = movementView === "cash" ? operationalConfirmedCashRows : registeredMovementRows;
   const movementDescription = movementView === "cash"
     ? `Vendas que entraram no caixa em ${activePeriodLabel}. Usa data de pagamento/caixa, não data da venda.`
     : `Vendas registradas em ${activePeriodLabel}. Abra no olho para editar. Ao lançar venda, o cliente também entra automaticamente em Leads.`;
   const movementTitle = movementView === "cash" ? "Entradas no caixa" : "Movimento do dia";
   const movementAction = movementView === "cash"
-    ? `${plural(confirmedCashRows.length, "entrada")} · caixa ${activePeriodLabel}`
+    ? `${plural(operationalConfirmedCashRows.length, "entrada")} · caixa ${activePeriodLabel}`
     : `${plural(registeredMovementRows.length, "registro")} · ${activePeriodLabel}`;
 
   const yesterdaySales = useMemo(() => {
     const days = Math.max(1, Math.round((new Date(`${activePeriod.end}T00:00:00`).getTime() - new Date(`${activePeriod.start}T00:00:00`).getTime()) / 86400000) + 1);
     const previousEnd = addDaysToKey(activePeriod.start, -1);
     const previousStart = addDaysToKey(previousEnd, -(days - 1));
-    return sales.filter((item) => getSaleFinancialState(item).countsRevenue && isDateInRange(item.saleDate || String(item.createdAt || "").slice(0, 10), previousStart, previousEnd));
-  }, [sales, activePeriod.start, activePeriod.end]);
+    return activeSales.filter((item) => getSaleFinancialState(item).countsRevenue && isDateInRange(item.saleDate || String(item.createdAt || "").slice(0, 10), previousStart, previousEnd));
+  }, [activeSales, activePeriod.start, activePeriod.end]);
 
   const receivableToday = useMemo(() => {
-    return sales.filter((item) => {
+    return activeSales.filter((item) => {
       if (!getSaleFinancialState(item).isValidSale) return false;
       if (!isReceivable(item)) return false;
       if (!isDateInRange(item.expectedPaymentDate, activePeriod.start, activePeriod.end)) return false;
@@ -661,10 +687,10 @@ export function SalesDashboardScreen() {
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     });
-  }, [sales, activePeriod.start, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
+  }, [activeSales, activePeriod.start, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
 
   const futureReceivables = useMemo(() => {
-    return sales.filter((item) => {
+    return activeSales.filter((item) => {
       if (!getSaleFinancialState(item).isValidSale) return false;
       if (!isReceivable(item)) return false;
       if (!item.expectedPaymentDate || item.expectedPaymentDate <= activePeriod.end) return false;
@@ -673,7 +699,7 @@ export function SalesDashboardScreen() {
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     }).sort((a, b) => String(a.expectedPaymentDate).localeCompare(String(b.expectedPaymentDate)));
-  }, [sales, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
+  }, [activeSales, activePeriod.end, dashboardSeller, dashboardType, dashboardPlatform]);
 
   const allWithdrawals = useMemo(() => {
     return [...cashWithdrawals].sort(
@@ -696,7 +722,7 @@ export function SalesDashboardScreen() {
   }, [allWithdrawals]);
 
   const allConfirmedCashRowsForWithdrawal = useMemo(() => {
-    return sales
+    return activeSales
       .filter((item) => {
         if (!getSaleFinancialState(item).countsCash) return false;
         if (!cashDateForSale(item)) return false;
@@ -706,7 +732,7 @@ export function SalesDashboardScreen() {
         return !withdrawnSaleIds.has(item.id);
       })
       .sort((a, b) => String(cashDateForSale(b) || "").localeCompare(String(cashDateForSale(a) || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  }, [sales, withdrawnSaleIds, dashboardSeller, dashboardType, dashboardPlatform]);
+  }, [activeSales, withdrawnSaleIds, dashboardSeller, dashboardType, dashboardPlatform]);
 
   const availableCashRowsForWithdrawal = allConfirmedCashRowsForWithdrawal;
 
@@ -734,14 +760,14 @@ export function SalesDashboardScreen() {
   }, [selectedWithdrawal, withdrawalSalesById]);
 
   const allCashHistorySales = useMemo(() => {
-    return sales.filter((item) => {
+    return activeSales.filter((item) => {
       if (!getSaleFinancialState(item).countsCash) return false;
       if (dashboardSeller !== "all" && item.sellerName !== dashboardSeller) return false;
       if (dashboardType !== "all" && saleTypeLabel(item.deliveryType, item.paymentStatus as PaymentStatus, item.paymentMethod) !== dashboardType) return false;
       if (dashboardPlatform !== "all" && platformFromRecord(item)?.id !== dashboardPlatform) return false;
       return true;
     });
-  }, [sales, dashboardSeller, dashboardType, dashboardPlatform]);
+  }, [activeSales, dashboardSeller, dashboardType, dashboardPlatform]);
 
   const cashMovementRows = useMemo(() => {
     const rows: CashMovementRow[] = [];
@@ -810,8 +836,8 @@ export function SalesDashboardScreen() {
       : filteredByDate.reduce((sum, item) => sum + subCommissionForSale(item), 0);
 
     const ownerCommission = isAdmin
-      ? confirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0)
-      : confirmedCashRows.reduce((sum, item) => sum + subCommissionForSale(item), 0);
+      ? operationalConfirmedCashRows.reduce((sum, item) => sum + ownerCashForSale(item), 0)
+      : operationalConfirmedCashRows.reduce((sum, item) => sum + subCommissionForSale(item), 0);
 
     const receivableTodayRevenue = isAdmin
       ? receivableToday.reduce((sum, item) => sum + ownerWalletValueForSale(item), 0)
@@ -828,7 +854,7 @@ export function SalesDashboardScreen() {
     // que ainda NÃO foram sacadas.
     // Não subtrair todos os saques do período, porque um saque pode ter sido feito
     // usando saldo antigo de outro período.
-    const periodAvailableCash = confirmedCashRows
+    const periodAvailableCash = operationalConfirmedCashRows
       .filter((item) => !withdrawnSaleIds.has(item.id))
       .reduce((sum, item) => {
         return sum + (isAdmin ? ownerWalletValueForSale(item) : subCommissionForSale(item));
@@ -858,7 +884,7 @@ export function SalesDashboardScreen() {
     };
   }, [
     periodWithdrawals,
-    confirmedCashRows,
+    operationalConfirmedCashRows,
     filteredByDate,
     futureReceivables,
     isAdmin,
@@ -929,7 +955,7 @@ export function SalesDashboardScreen() {
     } else if (type === "cod") {
       setSale((current) => ({ ...current, saleType: type, paymentStatus: "cod", paymentMethod: "COD", deliveryType: "COD - Motoboy", deliveryStatus: "scheduled", expectedPaymentDate: current.expectedPaymentDate || "", receivedDate: current.receivedDate || "", paymentDate: current.paymentDate || "" }));
     } else {
-      setSale((current) => ({ ...current, saleType: type, paymentStatus: current.paymentStatus === "paid" ? "paid" : "pending", paymentMethod: "PAGAMENTO ANTECIPADO", deliveryType: "PAGAMENTO ANTECIPADO", expectedPaymentDate: current.saleDate || todayKey(), receivedDate: current.receivedDate || "", paymentDate: current.paymentStatus === "paid" ? (current.paymentDate || current.saleDate || todayKey()) : "" }));
+      setSale((current) => ({ ...current, saleType: type, paymentStatus: current.paymentStatus === "paid" ? "paid" : "pending", paymentMethod: "PAGAMENTO ANTECIPADO", deliveryType: "PAGAMENTO ANTECIPADO", expectedPaymentDate: current.saleDate || todayKey(), receivedDate: current.receivedDate || "", paymentDate: current.paymentDate || "" }));
     }
   }
 
@@ -940,7 +966,17 @@ export function SalesDashboardScreen() {
       setToast({ title: "Garantia preservada", message: "Esta venda já possui Garantia Coinzz. A plataforma não foi alterada para evitar modificar o vínculo histórico.", tone: "amber" });
       return;
     }
-    setSale((current) => ({ ...current, salePlatform: platformId }));
+    if (editingSale?.salePlatform === "manual" && editingSale.productId && platformId !== "manual") {
+      setToast({ title: "Custos preservados", message: "Esta venda possui custos históricos de Venda Manual. A origem não foi alterada para preservar os vínculos financeiros.", tone: "amber" });
+      return;
+    }
+    setSale((current) => ({
+      ...current,
+      salePlatform: platformId,
+      ...(current.salePlatform === "manual" && platformId !== "manual" && !editingSale
+        ? { productId: "", productKitId: "", productQuantity: "", manualShippingAmount: "" }
+        : {})
+    }));
     if (platformId !== "coinzz") setGuaranteeDraft({ guaranteeType: "conditional", guaranteeAmount: "", paid: false, setupRequired: false, existing: false });
   }
 
@@ -992,12 +1028,15 @@ export function SalesDashboardScreen() {
     const exactOperationCommissionPercent = exactOperationCommission !== null && sale.totalAmountCents > 0
       ? Math.round((sale.operationCommissionAmountCents / sale.totalAmountCents) * 100 * 10000) / 10000
       : (sale.operationCommissionPercent ?? null);
+    const manualSale = sale.salePlatform === "manual";
+    const canChangeManualCosts = !editingSale || isAdmin;
+    const shippingCents = sale.manualShippingAmount.trim() ? moneyToCents(sale.manualShippingAmount) : null;
     return {
       customerName: sale.customerName,
       customerPhone: normalizeBrazilPhone(sale.customerPhone || ""),
       city: editingSale?.city && !sale.city.trim() ? editingSale.city : (sale.city.trim() || "Não informada"),
       state: sale.state || undefined,
-      productName: "Produto",
+      productName: editingSale?.productName || "Produto",
       saleDate: sale.saleDate || dashboardDate,
       quantity: editingSale?.quantity ?? bottleQuantity ?? kitQuantity ?? 1,
       kitQuantity,
@@ -1008,6 +1047,11 @@ export function SalesDashboardScreen() {
       sellerName: sale.sellerName,
       sellerId: sale.sellerId || undefined,
       salePlatform: sale.salePlatform || undefined,
+      productId: canChangeManualCosts ? (manualSale ? (sale.productId || null) : null) : undefined,
+      productKitId: canChangeManualCosts ? (manualSale ? (sale.productKitId || null) : null) : undefined,
+      productQuantity: canChangeManualCosts ? (manualSale && sale.productQuantity ? Number(sale.productQuantity) : null) : undefined,
+      manualShippingAmount: canChangeManualCosts ? (manualSale && shippingCents !== null ? moneyFromCents(shippingCents) : null) : undefined,
+      campaignId: sale.campaignId || (editingSale?.campaignId ? null : undefined),
       commissionRate: commissionPercentToRate(commissionPercent),
       paymentMethod: sale.paymentMethod,
       paymentStatus: sale.paymentStatus,
@@ -1018,7 +1062,7 @@ export function SalesDashboardScreen() {
       orderStatusNote: sale.orderStatusNote || undefined,
       expectedPaymentDate: sale.expectedPaymentDate || undefined,
       receivedDate: sale.receivedDate || undefined,
-      paymentDate: sale.paymentStatus === "paid" ? (sale.paymentDate || todayKey()) : (sale.paymentDate || undefined),
+      paymentDate: sale.paymentDate || undefined,
       saleTime: sale.saleTime || undefined,
       notes: sale.notes
     };
@@ -1087,19 +1131,32 @@ export function SalesDashboardScreen() {
     }
   }
 
+  function openDeleteModal(item: SaleRecord) {
+    setDeleteError(null);
+    setDeleteCandidate(item);
+  }
+
   async function confirmDeleteSale() {
-    if (!deleteCandidate) return;
+    if (!deleteCandidate || deleteInFlightRef.current) return;
+    const target = deleteCandidate;
+    deleteInFlightRef.current = true;
+    setIsDeletingSale(true);
+    setDeleteError(null);
     setError(null);
     setToast(null);
     try {
-      const response = await fetch(`/api/sales?id=${deleteCandidate.id}`, { method: "DELETE", cache: "no-store", credentials: "include" });
+      const response = await fetch(`/api/sales?id=${target.id}`, { method: "DELETE", cache: "no-store", credentials: "include" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result?.error || "Não foi possível excluir a venda.");
-      setSales((current) => current.filter((item) => item.id !== deleteCandidate.id));
+      setSales((current) => current.map((item) => item.id === target.id ? { ...item, deletedAt: result.deletedAt || new Date().toISOString() } : item));
       setDeleteCandidate(null);
+      setToast({ title: "Venda excluída", message: "A venda saiu dos painéis operacionais. O histórico financeiro e os vínculos de auditoria foram preservados.", tone: "money" });
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao excluir venda.");
+      setDeleteError(err instanceof Error ? err.message : "Erro ao excluir venda.");
+    } finally {
+      deleteInFlightRef.current = false;
+      setIsDeletingSale(false);
     }
   }
 
@@ -1112,7 +1169,7 @@ export function SalesDashboardScreen() {
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
         credentials: "include",
-        body: JSON.stringify({ paymentStatus: "paid", deliveryStatus: "delivered", paymentDate: todayKey() })
+        body: JSON.stringify({ paymentStatus: "paid" })
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result?.error || "Não foi possível confirmar o pagamento.");
@@ -1287,13 +1344,13 @@ export function SalesDashboardScreen() {
               </div>
             }
           />
-          {!isSalesLoaded || (movementView === "cash" && !isWithdrawalsLoaded) ? <PanelLoading /> : <><MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} /><MovementFooter items={movementItems} view={movementView} isAdmin={isAdmin} /></>}
+          {!isSalesLoaded || (movementView === "cash" && !isWithdrawalsLoaded) ? <PanelLoading /> : <><MovementTable items={movementItems} view={movementView} onEdit={openEditDrawer} onDelete={openDeleteModal} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} /><MovementFooter items={movementItems} view={movementView} isAdmin={isAdmin} /></>}
         </PremiumPanel>
 
         <PremiumPanel glow="purple">
           <PanelHeader icon={<Clock3 size={18} />} title="Caixa previsto" description="Carteira prevista. Só entra no caixa quando você marcar como pago." action={<button type="button" onClick={() => setCashTab("future")} className="rounded-xl border border-purple/25 bg-purple/10 px-3 py-2 text-xs font-semibold text-purple transition duration-[180ms] ease-out hover:bg-purple/15 hover:text-white">Ver próximos dias</button>} />
           {!isSalesLoaded || !isWithdrawalsLoaded ? <PanelLoading /> : <><div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/18 p-1.5"><TabButton active={cashTab === "today"} onClick={() => setCashTab("today")}>Período</TabButton><TabButton active={cashTab === "future"} onClick={() => setCashTab("future")}>Próximos dias</TabButton></div>
-          <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={(item) => setDeleteCandidate(item)} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />}</div>
+          <div className="mt-4">{activeCashItems.length === 0 ? <EmptyCashState futureCount={futureReceivables.length} onViewFuture={() => setCashTab("future")} /> : <CashList items={activeCashItems.slice(0, 9)} onEdit={openEditDrawer} onDelete={openDeleteModal} onMarkPaid={markSaleAsPaid} isAdmin={isAdmin} />}</div>
           {allWithdrawals.length ? <WithdrawalList withdrawals={allWithdrawals.slice(0, 5)} onOpen={openWithdrawalDetails} /> : null}
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="text-[10px] font-black uppercase tracking-[.16em] text-white/48">Total {cashTab === "today" ? "no período" : "próximos dias"}</p><p className="mt-2 text-3xl font-black text-white">{brl(activeCashTotal)}</p><p className="mt-1 text-xs font-semibold text-white/45">valor que entra na carteira ao confirmar pagamento</p></div>
@@ -1309,7 +1366,7 @@ export function SalesDashboardScreen() {
 
       {isSaleDrawerOpen ? (
         <SaleDrawer onClose={closeDrawer}>
-          <SaleFormPanel mode={drawerMode} sale={sale} sellers={sellers} lockSeller={isSeller} saleTotal={financialPreviewTotal} rawSaleTotal={saleTotal} sellerCommissionPreview={sellerCommissionPreview} ownerCommissionPreview={ownerCommissionPreview} operationCommissionPercentPreview={operationCommissionPercentPreview} isSaving={isSaving} onSubmit={submitSale} onUpdate={updateSale} onTotalAmountChange={updateTotalAmount} onOperationCommissionAmountChange={updateOperationCommissionAmount} onMoneyBlur={normalizeMoneyFields} onSaleDateChange={updateSaleDate} onTypeChange={updateSaleType} onPlatformChange={selectPlatform} onSellerChange={selectSellerById} guaranteeDraft={guaranteeDraft} onGuaranteeChange={setGuaranteeDraft} showGuarantee={isAdmin && sale.salePlatform === "coinzz" && sale.saleType === "pad"} />
+          <SaleFormPanel mode={drawerMode} sale={sale} originalSale={editingSale} sellers={sellers} lockSeller={isSeller} saleTotal={financialPreviewTotal} rawSaleTotal={saleTotal} sellerCommissionPreview={sellerCommissionPreview} ownerCommissionPreview={ownerCommissionPreview} operationCommissionPercentPreview={operationCommissionPercentPreview} isSaving={isSaving} onSubmit={submitSale} onUpdate={updateSale} onTotalAmountChange={updateTotalAmount} onOperationCommissionAmountChange={updateOperationCommissionAmount} onMoneyBlur={normalizeMoneyFields} onSaleDateChange={updateSaleDate} onTypeChange={updateSaleType} onPlatformChange={selectPlatform} onSellerChange={selectSellerById} guaranteeDraft={guaranteeDraft} onGuaranteeChange={setGuaranteeDraft} showGuarantee={isAdmin && sale.salePlatform === "coinzz" && sale.saleType === "pad"} />
         </SaleDrawer>
       ) : null}
 
@@ -1340,14 +1397,15 @@ export function SalesDashboardScreen() {
         />
       ) : null}
 
-      {deleteCandidate ? <ConfirmDeleteModal sale={deleteCandidate} onCancel={() => setDeleteCandidate(null)} onConfirm={confirmDeleteSale} /> : null}
+      {deleteCandidate ? <ConfirmDeleteModal sale={deleteCandidate} error={deleteError} isDeleting={isDeletingSale} onCancel={() => { if (!isDeletingSale) { setDeleteError(null); setDeleteCandidate(null); } }} onConfirm={confirmDeleteSale} /> : null}
     </div>
   );
 }
 
-function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, rawSaleTotal, sellerCommissionPreview, ownerCommissionPreview, operationCommissionPercentPreview, isSaving, onSubmit, onUpdate, onTotalAmountChange, onOperationCommissionAmountChange, onMoneyBlur, onSaleDateChange, onTypeChange, onPlatformChange, onSellerChange, guaranteeDraft, onGuaranteeChange, showGuarantee }: {
+function SaleFormPanel({ mode, sale, originalSale, sellers, lockSeller = false, saleTotal, rawSaleTotal, sellerCommissionPreview, ownerCommissionPreview, operationCommissionPercentPreview, isSaving, onSubmit, onUpdate, onTotalAmountChange, onOperationCommissionAmountChange, onMoneyBlur, onSaleDateChange, onTypeChange, onPlatformChange, onSellerChange, guaranteeDraft, onGuaranteeChange, showGuarantee }: {
   mode: DrawerMode;
   sale: SaleForm;
+  originalSale: SaleRecord | null;
   sellers: SellerProfile[];
   lockSeller?: boolean;
   saleTotal: number;
@@ -1370,15 +1428,24 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
   showGuarantee: boolean;
 }) {
   const selectedSeller = sellers.find((seller) => seller.id === sale.sellerId);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [phoneTouched, setPhoneTouched] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [initialPhone] = useState(sale.customerPhone || "");
   const phoneChanged = (sale.customerPhone || "") !== initialPhone;
   const phoneInvalid = !isValidBrazilPhone(sale.customerPhone || "") && (mode === "create" || phoneChanged);
+  const deliveryDateMissing = sale.deliveryStatus === "delivered" && !sale.receivedDate;
+
+  useEffect(() => {
+    fetch("/api/campaigns?status=active", { cache: "no-store", credentials: "include" })
+      .then((response) => response.json())
+      .then((payload) => setCampaigns(Array.isArray(payload.campaigns) ? payload.campaigns : []))
+      .catch(() => undefined);
+  }, []);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     setSubmitAttempted(true);
-    if (phoneInvalid) {
+    if (phoneInvalid || deliveryDateMissing) {
       event.preventDefault();
       return;
     }
@@ -1401,6 +1468,8 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
         </div>
         <p className="text-[11px] font-semibold text-white/42">A plataforma mostra a origem da venda. A modalidade continua sendo definida acima: PAD, COD ou Pagamento Antecipado.</p>
       </div>
+
+      {sale.salePlatform === "manual" ? <ManualSaleCostsSection sale={sale} originalSale={originalSale} lockSeller={lockSeller} onUpdate={onUpdate} /> : null}
 
       {showGuarantee ? <CoinzzGuaranteeBlock value={guaranteeDraft} onChange={onGuaranteeChange} /> : null}
 
@@ -1425,16 +1494,18 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
         <Field label="Valor líquido da comissão"><input className={inputClass} inputMode="decimal" value={sale.operationCommissionAmount} onChange={(e) => onOperationCommissionAmountChange(e.target.value)} onBlur={onMoneyBlur} /></Field>
         <Field label="Comissão líquida %"><div className="relative"><input className={cn(inputClass, "pr-9 tabular-nums text-white/72")} value={operationCommissionPercentPreview == null ? "—" : operationCommissionPercentPreview.toFixed(2).replace(".", ",")} readOnly /><span className="pointer-events-none absolute right-3.5 top-3 text-sm text-slate-500">%</span></div></Field>
         <Field label="Comissão do vendedor %"><input className={inputClass} inputMode="decimal" value={selectedSeller?.isOwner ? "0" : sale.commissionPercent} readOnly /></Field>
-        <Field label="Quantidade de frascos"><input className={inputClass} type="number" min={1} step="1" value={sale.bottleQuantity} onChange={(e) => onUpdate("bottleQuantity", e.target.value)} required={mode === "create"} /></Field>
+        {sale.salePlatform !== "manual" ? <Field label="Quantidade de frascos"><input className={inputClass} type="number" min={1} step="1" value={sale.bottleQuantity} onChange={(e) => onUpdate("bottleQuantity", e.target.value)} required={mode === "create"} /></Field> : null}
         <Field label="Data da venda"><input className={inputClass} type="date" value={sale.saleDate || todayKey()} onChange={(e) => onSaleDateChange(e.target.value)} /></Field>
         <Field label="Hora da venda"><input className={inputClass} type="time" value={sale.saleTime || ""} onChange={(e) => onUpdate("saleTime", e.target.value)} /></Field>
-        <Field label="Data da entrega ao cliente"><input className={inputClass} type="date" value={sale.receivedDate || ""} onChange={(e) => onUpdate("receivedDate", e.target.value)} /></Field>
+        <Field label="Data da entrega ao cliente"><input className={inputClass} type="date" value={sale.receivedDate || ""} onChange={(e) => { const value = e.target.value; onUpdate("receivedDate", value); if (value) onUpdate("deliveryStatus", "delivered"); }} /></Field>
         <Field label="Data de pagamento"><input className={inputClass} type="date" value={sale.paymentDate || ""} onChange={(e) => onUpdate("paymentDate", e.target.value)} /></Field>
-        <Field label="Status do pagamento"><select className={inputClass} value={sale.paymentStatus} onChange={(e) => { const status = e.target.value as PaymentStatus; onUpdate("paymentStatus", status); if (status === "paid" && !sale.paymentDate) onUpdate("paymentDate", todayKey()); }}><option value="pending">Pendente</option><option value="paid">Pago</option><option value="cod">COD</option></select></Field>
+        <Field label="Status do pagamento"><select className={inputClass} value={sale.paymentStatus} onChange={(e) => onUpdate("paymentStatus", e.target.value as PaymentStatus)}><option value="pending">Pendente</option><option value="paid">Pago</option><option value="cod">COD</option></select></Field>
         <Field label="Status do pedido"><select className={inputClass} value={normalizeOrderStatus(sale.orderStatus)} onChange={(e) => onUpdate("orderStatus", e.target.value as OrderStatus)}><option value="active">Ativo</option><option value="cancelled">Cancelado</option><option value="returned">Devolvido</option><option value="lost">Perdido</option><option value="review">Em análise</option></select></Field>
-        <Field label="Status da entrega"><select className={inputClass} value={sale.deliveryStatus} onChange={(e) => onUpdate("deliveryStatus", e.target.value as DeliveryStatus)}><option value="scheduled">Agendado</option><option value="pending">Pendente</option><option value="delivered">Entregue</option><option value="risk">Risco</option><option value="rescheduled">Reagendado</option></select></Field>
+        <Field label="Status da entrega"><select className={cn(inputClass, deliveryDateMissing && submitAttempted && "border-danger/55 focus:border-danger/65")} value={sale.deliveryStatus} onChange={(e) => onUpdate("deliveryStatus", e.target.value as DeliveryStatus)} aria-invalid={deliveryDateMissing && submitAttempted}><option value="scheduled">Agendado</option><option value="pending">Pendente</option><option value="delivered">Entregue</option><option value="risk">Risco</option><option value="rescheduled">Reagendado</option></select>{deliveryDateMissing ? <p className="mt-1.5 text-[11px] font-semibold text-danger">Informe a data em que o cliente recebeu o pedido.</p> : null}</Field>
         <div className="md:col-span-2"><Field label="Observação"><textarea className={cn(inputClass, "min-h-24 resize-none")} value={sale.notes || ""} onChange={(e) => { onUpdate("notes", e.target.value); onUpdate("orderStatusNote", e.target.value); }} placeholder="Endereço, confirmação, retorno, ajuste de pagamento ou observação do pedido..." /></Field></div>
       </div>
+
+      <Field label="Campanha"><select className={inputClass} value={sale.campaignId || ""} onChange={(event) => onUpdate("campaignId", event.target.value || null)}><option value="">Sem campanha / origem orgânica</option>{campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}{campaign.adAccountName ? ` · ${campaign.adAccountName}` : ""}</option>)}</select><p className="mt-1.5 text-[11px] text-slate-500">Opcional. Recomendado para vendas originadas de tráfego pago.</p></Field>
 
       {mode === "edit" && sale.legacyQuantity != null && !sale.bottleQuantity ? <p className="text-[11px] font-semibold leading-5 text-amber/75">Registro antigo: quantidade original {sale.legacyQuantity}. A quantidade de frascos permanece em branco até confirmação manual.</p> : null}
 
@@ -1463,6 +1534,121 @@ function SaleFormPanel({ mode, sale, sellers, lockSeller = false, saleTotal, raw
 function CoinzzGuaranteeBlock({ value, onChange }: { value: GuaranteeDraft; onChange: (value: GuaranteeDraft) => void }) {
   const helper = value.guaranteeType === "conditional" ? "Só será devida se o cliente não pagar e houver cobrança do produtor." : "Deve ser repassada ao produtor independentemente do pagamento do cliente.";
   return <section className="rounded-2xl border border-amber/15 bg-amber/[.035] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,.025)]"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[.14em] text-amber">Garantia Coinzz</p><p className="mt-1 text-xs text-slate-500">Configuração copiada para esta venda pós-paga.</p></div>{value.paid ? <span className="rounded-lg border border-money/20 px-2 py-1 text-[10px] text-money">Paga</span> : null}</div>{value.setupRequired ? <p className="mt-3 rounded-xl border border-amber/15 bg-black/10 p-3 text-xs text-amber/80">A migration 024 precisa ser aplicada para ativar esta garantia.</p> : <div className="mt-4 grid gap-3 md:grid-cols-2"><Field label="Tipo da garantia"><select className={inputClass} value={value.guaranteeType} disabled={value.paid} onChange={(event) => onChange({ ...value, guaranteeType: event.target.value as GuaranteeType })}><option value="conditional">Condicional</option><option value="mandatory">Obrigatória</option></select></Field><Field label="Valor da garantia"><input className={inputClass} inputMode="decimal" value={value.guaranteeAmount} disabled={value.paid} onChange={(event) => onChange({ ...value, guaranteeAmount: event.target.value })} required /></Field><p className="md:col-span-2 text-[11px] leading-5 text-slate-400">{value.paid ? "Para alterar tipo ou valor, estorne primeiro o pagamento em Financeiro → Garantias pós-pagas." : helper}</p></div>}</section>;
+}
+
+function ManualSaleCostsSection({ sale, originalSale, lockSeller, onUpdate }: { sale: SaleForm; originalSale: SaleRecord | null; lockSeller: boolean; onUpdate: <K extends keyof SaleForm>(field: K, value: SaleForm[K]) => void }) {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [obligations, setObligations] = useState<ManualSaleCostObligation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [canViewCosts, setCanViewCosts] = useState(!lockSeller);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const params = new URLSearchParams({ mode: "options" });
+    if (sale.productId) params.set("include", sale.productId);
+    if (sale.saleDate) params.set("asOf", sale.saleDate);
+    setLoading(true);
+    setLoadError(null);
+    fetch(`/api/products?${params}`, { cache: "no-store", credentials: "include" })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "Não foi possível carregar os produtos.");
+        if (!active) return;
+        setProducts(Array.isArray(payload.products) ? payload.products : []);
+        setSetupRequired(Boolean(payload.setupRequired));
+        setCanViewCosts(Boolean(payload.canViewCosts));
+      })
+      .catch((error) => { if (active) setLoadError(error instanceof Error ? error.message : "Não foi possível carregar os produtos."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [sale.productId, sale.saleDate]);
+
+  useEffect(() => {
+    if (!originalSale?.id || lockSeller) { setObligations([]); return; }
+    let active = true;
+    fetch(`/api/manual-sale-costs?saleId=${originalSale.id}`, { cache: "no-store", credentials: "include" })
+      .then((response) => response.json())
+      .then((payload) => { if (active) setObligations(Array.isArray(payload.obligations) ? payload.obligations : []); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [lockSeller, originalSale?.id]);
+
+  const selectedProduct = products.find((product) => product.id === sale.productId);
+  const activeKits = selectedProduct?.kits.filter((kit) => kit.isActive || kit.id === sale.productKitId) || [];
+  const quantity = Number(sale.productQuantity || 0);
+  const keepsHistoricalSnapshot = Boolean(originalSale?.productId === sale.productId && originalSale?.productQuantity === quantity && originalSale?.unitCostSnapshot);
+  const unitCost = keepsHistoricalSnapshot ? originalSale?.unitCostSnapshot : selectedProduct?.currentCost;
+  const unitCostCents = unitCost == null ? null : moneyToCents(unitCost);
+  const productCostCents = unitCostCents == null || quantity <= 0 ? null : unitCostCents * quantity;
+  const shippingCents = sale.manualShippingAmount.trim() ? moneyToCents(sale.manualShippingAmount) : null;
+  const totalCostsCents = productCostCents == null ? null : productCostCents + (shippingCents || 0);
+  const productPaid = obligations.some((item) => item.costKind === "product" && item.status === "paid");
+  const shippingPaid = obligations.some((item) => item.costKind === "shipping" && item.status === "paid");
+  const productLocked = productPaid || Boolean(lockSeller && originalSale);
+  const shippingLocked = shippingPaid || Boolean(lockSeller && originalSale);
+
+  function selectProduct(productId: string) {
+    onUpdate("productId", productId);
+    onUpdate("productKitId", "");
+    onUpdate("productQuantity", "");
+  }
+
+  function selectKit(kitId: string) {
+    const kit = activeKits.find((item) => item.id === kitId);
+    onUpdate("productKitId", kitId);
+    if (kit) {
+      onUpdate("productQuantity", String(kit.quantity));
+      onUpdate("bottleQuantity", String(kit.quantity));
+    }
+  }
+
+  function updateQuantity(value: string) {
+    onUpdate("productQuantity", value);
+    onUpdate("productKitId", "");
+    onUpdate("bottleQuantity", value);
+  }
+
+  return (
+    <section className="overflow-hidden rounded-[22px] border border-money/20 bg-[linear-gradient(145deg,rgba(7,38,27,.72),rgba(5,16,20,.9))] shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
+      <div className="flex items-start gap-3 border-b border-money/10 px-4 py-4 sm:px-5">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-money/20 bg-money/10 text-money"><PackageOpen size={18} /></span>
+        <div><p className="text-sm font-bold text-white">Custos da Venda Manual</p><p className="mt-1 text-[11px] leading-5 text-slate-400">Produto e frete serão criados como obrigações a pagar. Nenhuma despesa é lançada agora.</p></div>
+      </div>
+      <div className="space-y-4 p-4 sm:p-5">
+        {loading ? <div className="grid gap-3 sm:grid-cols-2"><div className="h-16 animate-pulse rounded-2xl bg-white/[.045]" /><div className="h-16 animate-pulse rounded-2xl bg-white/[.045]" /></div> : null}
+        {setupRequired ? <p className="rounded-xl border border-amber/20 bg-amber/[.06] p-3 text-xs leading-5 text-amber">A migration 034 precisa ser aplicada para ativar catálogo e custos da Venda Manual.</p> : null}
+        {loadError ? <p className="rounded-xl border border-danger/20 bg-danger/[.06] p-3 text-xs text-danger">{loadError}</p> : null}
+        {!loading && !setupRequired && !loadError && !products.length ? <div className="rounded-2xl border border-dashed border-white/10 bg-black/10 p-4"><p className="text-sm font-semibold text-white">Cadastre seu primeiro produto para calcular os custos da venda manual.</p>{!lockSeller ? <Link href="/products/new" className="mt-3 inline-flex rounded-xl border border-money/25 bg-money/10 px-3 py-2 text-xs font-bold text-money">Cadastrar produto</Link> : <p className="mt-2 text-xs text-slate-500">Solicite o cadastro a uma administradora.</p>}</div> : null}
+        {products.length ? <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Produto"><select className={inputClass} value={sale.productId} disabled={productLocked} onChange={(event) => selectProduct(event.target.value)} required={!originalSale || Boolean(originalSale.productId)}><option value="">Selecione um produto</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}{product.sku ? ` · ${product.sku}` : ""}{!product.isActive ? " · Inativo (histórico)" : ""}</option>)}</select></Field>
+            <Field label="Kit configurado (opcional)"><select className={inputClass} value={sale.productKitId} disabled={!selectedProduct || productLocked} onChange={(event) => selectKit(event.target.value)}><option value="">Quantidade personalizada</option>{activeKits.map((kit) => <option key={kit.id} value={kit.id}>{kit.name} · {kit.quantity} {selectedProduct?.unitName}</option>)}</select></Field>
+            <Field label="Quantidade"><input className={inputClass} type="number" min={1} step="1" value={sale.productQuantity} disabled={productLocked} onChange={(event) => updateQuantity(event.target.value)} required={!originalSale || Boolean(originalSale.productId)} /></Field>
+            <Field label="Frete"><div className="relative"><span className="absolute left-3.5 top-3 text-sm text-slate-500">R$</span><input className={cn(inputClass, "pl-10 tabular-nums")} inputMode="decimal" value={sale.manualShippingAmount} disabled={shippingLocked} onChange={(event) => onUpdate("manualShippingAmount", event.target.value)} onBlur={() => { const cents = moneyToCents(sale.manualShippingAmount); if (cents !== null) onUpdate("manualShippingAmount", formatMoneyInput(cents)); }} placeholder="Informar depois" /></div><p className="mt-1.5 text-[11px] text-slate-500">Opcional. Vazio significa que o valor ainda não é conhecido.</p></Field>
+          </div>
+          {selectedProduct && canViewCosts && unitCost == null ? <p className="rounded-xl border border-amber/20 bg-amber/[.06] p-3 text-xs font-semibold text-amber">Este produto não possui custo configurado para a data da venda. Configure o custo antes de registrar.</p> : null}
+          <div className="grid gap-2 border-t border-white/[.07] pt-4 sm:grid-cols-2 lg:grid-cols-5">
+            <ManualCostMetric label="Valor da venda" value={brl(saleTotalFromForm(sale))} />
+            <ManualCostMetric label="Receita líquida" value={sale.operationCommissionAmount.trim() ? brl(moneyFromCents(sale.operationCommissionAmountCents)) : "—"} tone="cyan" />
+            <ManualCostMetric label="Custo unitário" value={!canViewCosts ? "Calculado ao salvar" : unitCost == null ? "—" : brl(unitCost)} />
+            <ManualCostMetric label="Custo do produto" value={!canViewCosts ? "Protegido" : productCostCents == null ? "—" : brl(moneyFromCents(productCostCents))} />
+            <ManualCostMetric label="Custos a pagar" value={!canViewCosts ? "Calculado ao salvar" : totalCostsCents == null ? "—" : brl(moneyFromCents(totalCostsCents))} tone="money" />
+          </div>
+          {obligations.length ? <div className="border-t border-white/[.07] pt-4"><p className="mb-2 text-[10px] font-bold uppercase tracking-[.12em] text-slate-500">Custos da venda</p><div className="grid gap-2 sm:grid-cols-2">{obligations.map((item) => <div key={item.id} className="flex items-center justify-between rounded-xl border border-white/[.07] bg-black/10 px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-semibold text-slate-300">{item.costKind === "shipping" ? <Truck size={13} /> : <PackageOpen size={13} />}{item.costKind === "shipping" ? "Frete / Logística" : "Produto / Fábrica"}</span><span className={cn("text-xs font-bold", item.status === "paid" ? "text-money" : item.status === "cancelled" ? "text-slate-500" : "text-amber")}>{brl(item.amount)} · {item.status === "paid" ? "Pago" : item.status === "cancelled" ? "Cancelado" : "A pagar"}</span></div>)}</div></div> : null}
+        </> : null}
+      </div>
+    </section>
+  );
+}
+
+function saleTotalFromForm(sale: SaleForm) {
+  return moneyFromCents(sale.totalAmountCents);
+}
+
+function ManualCostMetric({ label, value, tone }: { label: string; value: string; tone?: "cyan" | "money" }) {
+  return <div className="rounded-xl border border-white/[.07] bg-black/10 px-3 py-3"><p className="text-[9px] font-bold uppercase tracking-[.1em] text-slate-500">{label}</p><p className={cn("mt-1.5 text-sm font-bold tabular-nums text-slate-200", tone === "cyan" && "text-cyan", tone === "money" && "text-money")}>{value}</p></div>;
 }
 
 function CashMovementHistory({ rows, activeStart, activeEnd, loading }: { rows: CashMovementRow[]; activeStart: string; activeEnd: string; loading: boolean }) {
@@ -1666,8 +1852,8 @@ function SaleDrawer({ children, onClose }: { children: ReactNode; onClose: () =>
   return <div className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-sm"><button type="button" aria-label="Fechar" className="absolute inset-0 cursor-default" onClick={onClose} /><aside className="relative h-full w-full max-w-2xl overflow-y-auto border-l border-white/10 bg-[#070b12] p-5 shadow-[0_30px_120px_rgba(0,0,0,.65)]"><button type="button" onClick={onClose} className="absolute right-5 top-5 rounded-xl border border-white/10 bg-white/[.04] p-2 text-white/60 transition hover:text-white"><X size={18} /></button><div className="pr-12">{children}</div></aside></div>;
 }
 
-function ConfirmDeleteModal({ sale, onCancel, onConfirm }: { sale: SaleRecord; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-[26px] border border-danger/25 bg-[#090d14] p-5 shadow-[0_30px_100px_rgba(0,0,0,.7)]"><div className="flex gap-3"><div className="h-fit rounded-2xl border border-danger/20 bg-danger/10 p-3 text-danger"><AlertTriangle size={20} /></div><div><h3 className="text-xl font-black text-white">Tem certeza que deseja excluir esta venda?</h3><p className="mt-2 text-sm leading-6 text-white/64">Essa ação remove o lançamento do painel. Ela não dispara notificação de pedido.</p><p className="mt-3 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-sm font-bold text-white/80">{sale.customerName} · {brl(sale.totalAmount)}</p></div></div><div className="mt-5 flex justify-end gap-3"><button type="button" onClick={onCancel} className="rounded-xl border border-white/10 bg-white/[.04] px-4 py-2 text-sm font-black text-white/72 hover:text-white">Cancelar</button><button type="button" onClick={onConfirm} className="rounded-xl border border-danger/25 bg-danger/15 px-4 py-2 text-sm font-black text-danger hover:bg-danger/20 hover:text-white">Excluir venda</button></div></div></div>;
+function ConfirmDeleteModal({ sale, error, isDeleting, onCancel, onConfirm }: { sale: SaleRecord; error: string | null; isDeleting: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm"><div role="alertdialog" aria-modal="true" aria-labelledby="delete-sale-title" aria-describedby="delete-sale-description" aria-busy={isDeleting} className="w-full max-w-md rounded-[26px] border border-danger/25 bg-[#090d14] p-5 shadow-[0_30px_100px_rgba(0,0,0,.7)]"><div className="flex gap-3"><div className="h-fit rounded-2xl border border-danger/20 bg-danger/10 p-3 text-danger"><AlertTriangle size={20} /></div><div><h3 id="delete-sale-title" className="text-xl font-black text-white">Tem certeza que deseja excluir esta venda?</h3><p id="delete-sale-description" className="mt-2 text-sm leading-6 text-white/64">Esta venda será removida dos painéis operacionais, mas o histórico financeiro e os vínculos de auditoria serão preservados.</p><p className="mt-3 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-sm font-bold text-white/80">{sale.customerName} · {brl(sale.totalAmount)}</p>{error ? <p role="alert" className="mt-3 rounded-xl border border-danger/25 bg-danger/10 px-3 py-2 text-sm leading-5 text-danger">{error}</p> : null}</div></div><div className="mt-5 flex justify-end gap-3"><button type="button" onClick={onCancel} disabled={isDeleting} className="rounded-xl border border-white/10 bg-white/[.04] px-4 py-2 text-sm font-black text-white/72 hover:text-white disabled:cursor-not-allowed disabled:opacity-45">Cancelar</button><button type="button" onClick={onConfirm} disabled={isDeleting} className="min-w-[126px] rounded-xl border border-danger/25 bg-danger/15 px-4 py-2 text-sm font-black text-danger hover:bg-danger/20 hover:text-white disabled:cursor-wait disabled:opacity-60">{isDeleting ? "Excluindo..." : "Excluir venda"}</button></div></div></div>;
 }
 
 function SaleToast({ title, message, tone }: ToastState) {

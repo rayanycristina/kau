@@ -1,11 +1,11 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, type HTMLMotionProps } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-type TacticalButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+type TacticalButtonProps = Omit<HTMLMotionProps<"button">, "children"> & {
   children: ReactNode;
   icon?: LucideIcon;
   tone?: "money" | "cyan" | "amber" | "danger" | "purple" | "neutral";

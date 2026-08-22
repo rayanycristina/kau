@@ -26,8 +26,30 @@ function cleanDate(value: unknown) {
 }
 
 function cleanCategory(value: unknown): ExpenseCategory | null {
-  const category = String(value ?? "").trim() as ExpenseCategory;
-  return expenseCategories.includes(category) ? category : null;
+  const category = String(value ?? "").trim().toLowerCase();
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(category) ? category : null;
+}
+
+function cleanUuid(value: unknown) {
+  const id = String(value || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null;
+}
+
+async function validateCampaign(admin: ReturnType<typeof getSupabaseAdminClient>, category: string, value: unknown) {
+  if (value === undefined || value === null || value === "") return { campaignId: null } as const;
+  if (category !== "traffic") return { error: "Somente despesas de Tráfego podem ser vinculadas a campanhas." } as const;
+  const campaignId = cleanUuid(value);
+  if (!campaignId) return { error: "Selecione uma campanha válida." } as const;
+  const result = await admin.from("campaigns").select("id,status").eq("id", campaignId).maybeSingle();
+  if (result.error) return { error: /campaigns|schema cache/i.test(result.error.message) ? "A migration 031 precisa ser aplicada antes de vincular campanhas." : result.error.message } as const;
+  if (!result.data || result.data.status === "archived") return { error: "A campanha selecionada não está disponível." } as const;
+  return { campaignId } as const;
+}
+
+async function categoryAvailable(admin: ReturnType<typeof getSupabaseAdminClient>, category: string) {
+  const result = await admin.from("expense_categories").select("slug,is_active").eq("slug", category).maybeSingle();
+  const setupRequired = result.error?.code === "42P01" || /expense_categories|schema cache/i.test(String(result.error?.message || ""));
+  return { available: Boolean(result.data?.is_active) || (setupRequired && expenseCategories.includes(category)), setupRequired, error: setupRequired ? null : result.error };
 }
 
 function cleanCalculationMode(value: unknown): TaxCalculationMode {
@@ -107,6 +129,7 @@ function mapExpense(row: Record<string, unknown>): Expense {
     source: row.source ? String(row.source) : undefined, notes: row.notes ? String(row.notes) : undefined,
     createdBy: String(row.created_by ?? ""), createdAt: row.created_at ? String(row.created_at) : undefined,
     updatedAt: row.updated_at ? String(row.updated_at) : undefined,
+    campaignId: row.campaign_id ? String(row.campaign_id) : undefined,
     taxItems: rawTaxes.map(mapTaxItem)
   };
 }
@@ -123,12 +146,34 @@ function isMissingGuaranteeTable(error: { message?: string; code?: string } | nu
   return error?.code === "42P01" || /postpaid_guarantees|schema cache/i.test(String(error?.message ?? ""));
 }
 
+function isMissingManualSaleCostTable(error: { message?: string; code?: string } | null) {
+  return error?.code === "42P01" || /manual_sale_cost_obligations|schema cache/i.test(String(error?.message ?? ""));
+}
+
+function isMissingParticipationTable(error: { message?: string; code?: string } | null) {
+  return error?.code === "42P01" || /sale_coproducer_obligations|schema cache/i.test(String(error?.message ?? ""));
+}
+
 const managedExpenseMessage = "Esta despesa é gerenciada pelo módulo Garantias pós-pagas. Realize o estorno da garantia.";
+const managedManualSaleCostMessage = "Esta despesa é gerenciada pelos custos da Venda Manual e não pode ser alterada diretamente.";
+const managedParticipationMessage = "Esta despesa é gerenciada pelo módulo Participações e não pode ser alterada diretamente.";
 
 async function linkedGuarantee(admin: ReturnType<typeof getSupabaseAdminClient>, expenseId: string) {
   const result = await admin.from("postpaid_guarantees").select("id").eq("expense_id", expenseId).maybeSingle();
   if (result.error && isMissingGuaranteeTable(result.error)) return { id: null, unavailable: true, error: null };
   return { id: result.data?.id ? String(result.data.id) : null, unavailable: false, error: result.error };
+}
+
+async function linkedManualSaleCost(admin: ReturnType<typeof getSupabaseAdminClient>, expenseId: string) {
+  const result = await admin.from("manual_sale_cost_obligations").select("id").eq("expense_id", expenseId).maybeSingle();
+  if (result.error && isMissingManualSaleCostTable(result.error)) return { id: null, unavailable: true, error: null };
+  return { id: result.data?.id ? String(result.data.id) : null, unavailable: false, error: result.error };
+}
+
+async function linkedParticipation(admin: ReturnType<typeof getSupabaseAdminClient>, expenseId: string) {
+  const result = await admin.from("sale_coproducer_obligations").select("id").eq("expense_id", expenseId).maybeSingle();
+  if (result.error && isMissingParticipationTable(result.error)) return { id: null, error: null };
+  return { id: result.data?.id ? String(result.data.id) : null, error: result.error };
 }
 
 function expensesUnavailableResponse() {
@@ -180,7 +225,12 @@ export async function GET(request: Request) {
 
   const expenses = ((data ?? []) as unknown as Record<string, unknown>[]).map((row) => mapExpense(row));
   if (expenses.length) {
-    const guaranteeLinks = await admin.from("postpaid_guarantees").select("id,expense_id").in("expense_id", expenses.map((item) => item.id));
+    const expenseIds = expenses.map((item) => item.id);
+    const [guaranteeLinks, manualSaleCostLinks, participationLinks] = await Promise.all([
+      admin.from("postpaid_guarantees").select("id,expense_id").in("expense_id", expenseIds),
+      admin.from("manual_sale_cost_obligations").select("id,expense_id").in("expense_id", expenseIds),
+      admin.from("sale_coproducer_obligations").select("id,expense_id").in("expense_id", expenseIds)
+    ]);
     if (!guaranteeLinks.error) {
       const byExpense = new Map((guaranteeLinks.data ?? []).map((link) => [String(link.expense_id), String(link.id)]));
       expenses.forEach((expense) => {
@@ -190,8 +240,26 @@ export async function GET(request: Request) {
     } else if (!isMissingGuaranteeTable(guaranteeLinks.error)) {
       return NextResponse.json({ error: "Não foi possível identificar as despesas gerenciadas por garantias." }, { status: 500 });
     }
+    if (!manualSaleCostLinks.error) {
+      const byExpense = new Map((manualSaleCostLinks.data ?? []).map((link) => [String(link.expense_id), String(link.id)]));
+      expenses.forEach((expense) => {
+        const obligationId = byExpense.get(expense.id);
+        if (obligationId) {
+          expense.managedByManualSaleCost = true;
+          expense.manualSaleCostObligationId = obligationId;
+        }
+      });
+    } else if (!isMissingManualSaleCostTable(manualSaleCostLinks.error)) {
+      return NextResponse.json({ error: "Não foi possível identificar as despesas gerenciadas pela Venda Manual." }, { status: 500 });
+    }
+    if (!participationLinks.error) {
+      const byExpense = new Map((participationLinks.data ?? []).map((link) => [String(link.expense_id), String(link.id)]));
+      expenses.forEach((expense) => { const participationId = byExpense.get(expense.id); if (participationId) { expense.managedByParticipation = true; expense.participationId = participationId; } });
+    } else if (!isMissingParticipationTable(participationLinks.error)) {
+      return NextResponse.json({ error: "Não foi possível identificar despesas gerenciadas por Participações." }, { status: 500 });
+    }
   }
-  const taxesTotal = expenses.reduce((sum, item) => sum + item.taxItems.reduce((taxSum, tax) => taxSum + tax.amount, 0), 0);
+  const taxesTotal = expenses.reduce((sum, item) => sum + (item.taxItems || []).reduce((taxSum, tax) => taxSum + tax.amount, 0), 0);
   return NextResponse.json({ configured: true, setupRequired: false, taxSetupRequired, expenses, total: expenses.reduce((sum, item) => sum + item.amount, 0) + taxesTotal }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
@@ -199,16 +267,22 @@ export async function POST(request: Request) {
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
   if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Supabase admin não configurado." }, { status: 503 });
-  const normalized = normalizeExpense(await request.json().catch(() => ({})));
+  const body = await request.json().catch(() => ({})) as Partial<ExpenseInput>;
+  const normalized = normalizeExpense(body);
   if ("error" in normalized) return NextResponse.json({ error: normalized.error }, { status: 400 });
 
   const admin = getSupabaseAdminClient();
+  const selectedCategory = await categoryAvailable(admin, normalized.expense.category);
+  if (selectedCategory.error) return NextResponse.json({ error: selectedCategory.error.message }, { status: 500 });
+  if (!selectedCategory.available) return NextResponse.json({ error: "Selecione uma categoria ativa." }, { status: 400 });
+  const campaign = await validateCampaign(admin, normalized.expense.category, body.campaignId);
+  if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
   if (normalized.taxItems.length) {
     const check = await admin.from("expense_tax_items").select("id").limit(1);
     if (check.error) return isMissingTaxTable(check.error) ? taxesUnavailableResponse() : NextResponse.json({ error: check.error.message }, { status: 500 });
   }
 
-  const { data, error } = await admin.from("expenses").insert({ ...normalized.expense, created_by: auth.user.id }).select("*").single();
+  const { data, error } = await admin.from("expenses").insert({ ...normalized.expense, ...(campaign.campaignId ? { campaign_id: campaign.campaignId } : {}), created_by: auth.user.id }).select("*").single();
   if (error) return isMissingExpensesTable(error) ? expensesUnavailableResponse() : NextResponse.json({ error: error.message }, { status: 500 });
   if (normalized.taxItems.length) {
     const taxInsert = await admin.from("expense_tax_items").insert(taxPayload(String(data.id), normalized.taxItems)).select("*");
@@ -227,19 +301,38 @@ export async function PATCH(request: Request) {
   if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Supabase admin não configurado." }, { status: 503 });
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Informe o id da despesa." }, { status: 400 });
-  const normalized = normalizeExpense(await request.json().catch(() => ({})));
+  const body = await request.json().catch(() => ({})) as Partial<ExpenseInput>;
+  const normalized = normalizeExpense(body);
   if ("error" in normalized) return NextResponse.json({ error: normalized.error }, { status: 400 });
 
   const admin = getSupabaseAdminClient();
   const guarantee = await linkedGuarantee(admin, id);
   if (guarantee.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (guarantee.id) return NextResponse.json({ error: managedExpenseMessage, guaranteeId: guarantee.id }, { status: 409 });
+  const manualSaleCost = await linkedManualSaleCost(admin, id);
+  if (manualSaleCost.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
+  if (manualSaleCost.id) {
+    return NextResponse.json({ error: managedManualSaleCostMessage, manualSaleCostObligationId: manualSaleCost.id }, { status: 409 });
+  }
+  const participation = await linkedParticipation(admin, id);
+  if (participation.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
+  if (participation.id) return NextResponse.json({ error: managedParticipationMessage, participationId: participation.id }, { status: 409 });
+  const currentExpense = await admin.from("expenses").select("category").eq("id", id).maybeSingle();
+  if (currentExpense.error) return NextResponse.json({ error: currentExpense.error.message }, { status: 500 });
+  if (String(currentExpense.data?.category || "") !== normalized.expense.category) {
+    const category = await categoryAvailable(admin, normalized.expense.category);
+    if (category.error) return NextResponse.json({ error: category.error.message }, { status: 500 });
+    if (!category.available) return NextResponse.json({ error: "Selecione uma categoria ativa." }, { status: 400 });
+  }
+  const campaign = await validateCampaign(admin, normalized.expense.category, body.campaignId);
+  if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
   const taxCheck = await admin.from("expense_tax_items").select("id").eq("expense_id", id).limit(1);
   const taxTableAvailable = !taxCheck.error;
   if (taxCheck.error && !isMissingTaxTable(taxCheck.error)) return NextResponse.json({ error: taxCheck.error.message }, { status: 500 });
   if (!taxTableAvailable && normalized.taxItems.length) return taxesUnavailableResponse();
 
-  const { data, error } = await admin.from("expenses").update(normalized.expense).eq("id", id).select("*").maybeSingle();
+  const updatePayload = { ...normalized.expense, ...(body.campaignId !== undefined ? { campaign_id: campaign.campaignId } : {}) };
+  const { data, error } = await admin.from("expenses").update(updatePayload).eq("id", id).select("*").maybeSingle();
   if (error) return isMissingExpensesTable(error) ? expensesUnavailableResponse() : NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Despesa não encontrada." }, { status: 404 });
 
@@ -265,6 +358,14 @@ export async function DELETE(request: Request) {
   const guarantee = await linkedGuarantee(admin, id);
   if (guarantee.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (guarantee.id) return NextResponse.json({ error: managedExpenseMessage, guaranteeId: guarantee.id }, { status: 409 });
+  const manualSaleCost = await linkedManualSaleCost(admin, id);
+  if (manualSaleCost.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
+  if (manualSaleCost.id) {
+    return NextResponse.json({ error: managedManualSaleCostMessage, manualSaleCostObligationId: manualSaleCost.id }, { status: 409 });
+  }
+  const participation = await linkedParticipation(admin, id);
+  if (participation.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
+  if (participation.id) return NextResponse.json({ error: managedParticipationMessage, participationId: participation.id }, { status: 409 });
   const { data, error } = await admin.from("expenses").delete().eq("id", id).select("id");
   if (error) return isMissingExpensesTable(error) ? expensesUnavailableResponse() : NextResponse.json({ error: error.message }, { status: 500 });
   if (!data?.length) return NextResponse.json({ error: "Despesa não encontrada." }, { status: 404 });

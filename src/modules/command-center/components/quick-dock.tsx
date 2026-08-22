@@ -248,6 +248,7 @@ export function QuickDock() {
 
       const savedSale = payload.sale as SaleRecord;
       registerSale(savedSale);
+      window.dispatchEvent(new Event("kau:financial-data-changed"));
       setCompletedAction(`Venda registrada: ${savedSale.customerName} · ${formatBRL(savedSale.totalAmount)}`);
       setActiveAction(null);
       setSale(initialSale);

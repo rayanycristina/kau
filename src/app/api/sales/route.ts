@@ -19,6 +19,12 @@ function toOptionalMoney(value: unknown) {
   return number !== null && number >= 0 ? number : null;
 }
 
+function toOptionalNonNegativeMoney(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const number = roundMoney(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
 function toOptionalPositiveInteger(value: unknown) {
   if (value === undefined || value === null || value === "") return null;
   const number = Number(value);
@@ -136,6 +142,11 @@ function expectedPaymentDateForSale(body: Partial<SaleInput>) {
   return paymentStatus === "paid" ? cleanText(body.saleDate) : null;
 }
 
+function cleanUuid(value: unknown) {
+  const id = String(value || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null;
+}
+
 function normalizeCommissionRate(value: unknown, fallbackPercent = 5) {
   // Store as percent: 15 means 15%. Accept old decimal input too: 0.15 => 15.
   if (value === undefined || value === null || value === "") return Math.round(fallbackPercent * 100) / 100;
@@ -176,6 +187,122 @@ function isSalesPlatformConstraintError(error: { message?: string } | null | und
   return /sales_sale_platform_check|sale_platform.*check constraint/i.test(String(error?.message || ""));
 }
 
+function isCampaignSchemaError(error: { message?: string } | null | undefined) {
+  return /campaign_id|public\.campaigns|relation ['"]?campaigns|schema cache/i.test(String(error?.message || ""));
+}
+
+function isSalesSoftDeleteSchemaError(error: { code?: string; message?: string } | null | undefined) {
+  return ["42703", "PGRST204"].includes(String(error?.code || ""))
+    || /deleted_at|deleted_by/i.test(String(error?.message || ""));
+}
+
+function isProductDomainSchemaError(error: { code?: string; message?: string } | null | undefined) {
+  return ["42P01", "42703", "PGRST200", "PGRST204"].includes(String(error?.code || ""))
+    || /products|product_kits|product_cost_history|product_id|product_kit_id|product_quantity|unit_cost_snapshot|manual_shipping_amount|manual_costs_created_by|schema cache/i.test(String(error?.message || ""));
+}
+
+async function resolveManualSaleFields(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  body: Partial<SaleInput>,
+  actorId: string,
+  current?: Record<string, unknown>
+) {
+  const platform = body.salePlatform !== undefined ? cleanPlatform(body.salePlatform) : cleanPlatform(current?.sale_platform);
+  if (platform !== "manual") {
+    return {
+      fields: {
+        product_id: null,
+        product_kit_id: null,
+        product_quantity: null,
+        unit_cost_snapshot: null,
+        total_product_cost_snapshot: null,
+        manual_shipping_amount: null,
+        manual_costs_created_by: null
+      }
+    } as const;
+  }
+
+  const currentPlatform = cleanPlatform(current?.sale_platform);
+  const currentProductId = cleanUuid(current?.product_id);
+  const currentKitId = cleanUuid(current?.product_kit_id);
+  const currentQuantity = toOptionalPositiveInteger(current?.product_quantity);
+  const currentSaleDate = String(current?.created_at || "").slice(0, 10);
+  const productId = cleanUuid(body.productId !== undefined ? body.productId : current?.product_id);
+  const rawShipping = body.manualShippingAmount !== undefined ? body.manualShippingAmount : current?.manual_shipping_amount;
+  const shipping = toOptionalNonNegativeMoney(rawShipping);
+  if (rawShipping !== undefined && rawShipping !== null && rawShipping !== "" && shipping === null) {
+    return { error: "Informe um frete válido, maior ou igual a zero." } as const;
+  }
+  if (!productId) {
+    if (currentPlatform !== "manual" || currentProductId || (shipping !== null && shipping > 0)) {
+      return { error: "Selecione um produto para a Venda Manual." } as const;
+    }
+    // Venda Manual anterior ao catálogo: uma edição operacional não recebe
+    // produto, custo ou obrigação inventados. O admin pode completar depois.
+    return {
+      fields: {
+        product_id: null,
+        product_kit_id: null,
+        product_quantity: null,
+        unit_cost_snapshot: null,
+        total_product_cost_snapshot: null,
+        manual_shipping_amount: null,
+        manual_costs_created_by: actorId
+      }
+    } as const;
+  }
+
+  const product = await supabase.from("products").select("id,name,status,available_for_new_sales").eq("id", productId).maybeSingle();
+  if (product.error) return { error: isProductDomainSchemaError(product.error) ? "A migration 034 precisa ser aplicada para usar custos da Venda Manual." : product.error.message, setupRequired: isProductDomainSchemaError(product.error) } as const;
+  if (!product.data) return { error: "Produto não encontrado." } as const;
+  const productChanged = currentPlatform !== "manual" || currentProductId !== productId;
+  if (!(product.data.status === "active" && product.data.available_for_new_sales === true) && productChanged) return { error: "O produto selecionado não está ativo." } as const;
+
+  const kitId = cleanUuid(body.productKitId !== undefined ? body.productKitId : current?.product_kit_id);
+  let quantity = toOptionalPositiveInteger(body.productQuantity !== undefined ? body.productQuantity : current?.product_quantity);
+  if (kitId) {
+    const kit = await supabase.from("product_kits").select("id,product_id,quantity,is_active").eq("id", kitId).maybeSingle();
+    if (kit.error) return { error: isProductDomainSchemaError(kit.error) ? "A migration 034 precisa ser aplicada para usar kits." : kit.error.message, setupRequired: isProductDomainSchemaError(kit.error) } as const;
+    if (!kit.data || String(kit.data.product_id) !== productId) return { error: "O kit selecionado não pertence a este produto." } as const;
+    const kitChanged = currentPlatform !== "manual" || currentKitId !== kitId || productChanged;
+    if (!kit.data.is_active && kitChanged) return { error: "O kit selecionado não está ativo para este produto." } as const;
+    if (kitChanged) quantity = Number(kit.data.quantity);
+  }
+  if (!quantity) return { error: "Informe uma quantidade válida para o produto." } as const;
+
+  const saleDate = cleanText(body.saleDate) || currentSaleDate || new Date().toISOString().slice(0, 10);
+  const snapshotChanged = currentPlatform !== "manual"
+    || productChanged
+    || currentKitId !== kitId
+    || currentQuantity !== quantity
+    || currentSaleDate !== saleDate;
+  if (snapshotChanged) {
+    const cost = await supabase.from("product_cost_history").select("unit_cost,effective_from").eq("product_id", productId).lte("effective_from", saleDate).order("effective_from", { ascending: false }).limit(1).maybeSingle();
+    if (cost.error) return { error: isProductDomainSchemaError(cost.error) ? "A migration 034 precisa ser aplicada para consultar custos do produto." : cost.error.message, setupRequired: isProductDomainSchemaError(cost.error) } as const;
+    if (!cost.data) return { error: "Este produto não possui custo configurado para a data da venda." } as const;
+  }
+
+  return {
+    fields: {
+      product_id: productId,
+      product_kit_id: kitId,
+      product_quantity: quantity,
+      manual_shipping_amount: shipping,
+      manual_costs_created_by: actorId
+    }
+  } as const;
+}
+
+async function validateCampaign(supabase: ReturnType<typeof getSupabaseServerClient>, value: unknown) {
+  if (value === undefined || value === null || value === "") return { campaignId: null } as const;
+  const campaignId = cleanUuid(value);
+  if (!campaignId) return { error: "Selecione uma campanha válida." } as const;
+  const result = await supabase.from("campaigns").select("id,status").eq("id", campaignId).maybeSingle();
+  if (result.error) return { error: isCampaignSchemaError(result.error) ? "A migration 031 precisa ser aplicada antes de vincular campanhas." : result.error.message } as const;
+  if (!result.data || result.data.status === "archived") return { error: "A campanha selecionada não está disponível." } as const;
+  return { campaignId } as const;
+}
+
 async function resolveOperationalSeller(supabase: ReturnType<typeof getSupabaseServerClient>, profile: UserProfile, sellerId?: string | null) {
   let query = supabase.from("sellers").select("id,user_id,full_name,display_name,commission_percent,status,is_owner");
   query = isAdmin(profile) ? query.eq("id", sellerId || "") : query.eq("user_id", profile.id);
@@ -202,6 +329,8 @@ function normalizeSale(body: Partial<SaleInput>) {
   const kitQuantity = toOptionalPositiveInteger(body.kitQuantity);
   const bottleQuantity = toOptionalPositiveInteger(body.bottleQuantity);
   const state = cleanState(body.state);
+  const receivedDate = cleanText(body.receivedDate);
+  const deliveryStatus = receivedDate ? "delivered" : (body.deliveryStatus || "pending");
 
   if (!cleanText(body.customerName)) return { error: "Informe o nome do cliente." } as const;
   if (!cleanText(body.city)) return { error: "Informe a cidade do cliente." } as const;
@@ -212,6 +341,7 @@ function normalizeSale(body: Partial<SaleInput>) {
   if (body.bottleQuantity != null && bottleQuantity === null) return { error: "Informe uma quantidade de frascos válida." } as const;
   if (body.operationCommissionAmount != null && exactOperationCommission === null) return { error: "Informe um valor líquido de comissão válido." } as const;
   if (!sellerName) return { error: "Informe o vendedor." } as const;
+  if (deliveryStatus === "delivered" && !receivedDate) return { error: "Informe a data em que o cliente recebeu o pedido." } as const;
 
   return {
     sale: {
@@ -229,17 +359,18 @@ function normalizeSale(body: Partial<SaleInput>) {
       seller_name: sellerName,
       seller_id: cleanText(body.sellerId),
       sale_platform: cleanPlatform(body.salePlatform),
+      ...(body.campaignId ? { campaign_id: cleanUuid(body.campaignId) } : {}),
       commission_rate: commissionRate,
       payment_method: cleanText(body.paymentMethod) || "PAGAMENTO ANTECIPADO",
       payment_status: body.paymentStatus || "pending",
       delivery_type: cleanText(body.deliveryType) || "Entrega padrão",
-      delivery_status: body.deliveryStatus || "pending",
+      delivery_status: deliveryStatus,
       order_status: primaryOrderStatus(body.orderStatus),
       order_tags: cleanOrderTags(body.orderTags),
       order_status_note: cleanText(body.orderStatusNote),
       expected_payment_date: expectedPaymentDateForSale(body),
-      received_date: cleanText(body.receivedDate),
-      payment_date: cleanText(body.paymentDate) || (String(body.paymentStatus || "").toLowerCase() === "paid" ? cleanText(body.saleDate) || String(new Date().toISOString()).slice(0, 10) : null),
+      received_date: receivedDate,
+      payment_date: cleanText(body.paymentDate),
       sale_time: cleanText(body.saleTime),
       notes: cleanText(body.notes),
       ...(cleanText(body.saleDate) ? { created_at: saleDateToTimestamp(body.saleDate, body.saleTime) } : {})
@@ -247,7 +378,7 @@ function normalizeSale(body: Partial<SaleInput>) {
   } as const;
 }
 
-function mapSale(row: Record<string, unknown>) {
+function mapSale(row: Record<string, unknown>, exposeCosts = true) {
   return {
     id: row.id,
     customerName: row.customer_name,
@@ -268,6 +399,15 @@ function mapSale(row: Record<string, unknown>) {
     sellerName: row.seller_name,
     sellerId: row.seller_id || null,
     salePlatform: row.sale_platform || undefined,
+    productId: row.product_id || null,
+    productKitId: row.product_kit_id || null,
+    productQuantity: row.product_quantity == null ? null : Number(row.product_quantity),
+    ...(exposeCosts ? {
+      unitCostSnapshot: row.unit_cost_snapshot == null ? null : Number(row.unit_cost_snapshot),
+      totalProductCostSnapshot: row.total_product_cost_snapshot == null ? null : Number(row.total_product_cost_snapshot),
+      manualShippingAmount: row.manual_shipping_amount == null ? null : Number(row.manual_shipping_amount)
+    } : {}),
+    campaignId: row.campaign_id || null,
     commissionRate: commissionPercentFromStored(row.commission_rate),
     commissionAmount: row.commission_amount == null ? calculateCommission(row.total_amount, row.commission_rate) : Number(row.commission_amount),
     paymentMethod: row.payment_method,
@@ -279,6 +419,8 @@ function mapSale(row: Record<string, unknown>) {
     orderStatusNote: row.order_status_note || undefined,
     expectedPaymentDate: row.expected_payment_date || undefined,
     notes: stripOrderMarkers(row.notes) || undefined,
+    deletedAt: row.deleted_at || undefined,
+    deletedBy: row.deleted_by || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -286,13 +428,18 @@ function mapSale(row: Record<string, unknown>) {
 
 async function assertSaleAccess(id: string, profile: UserProfile) {
   const supabase = getSupabaseServerClient();
-  const { data } = await supabase.from("sales").select("seller_name").eq("id", id).maybeSingle();
+  let result = await supabase.from("sales").select("seller_name,deleted_at").eq("id", id).maybeSingle();
+  if (result.error && isSalesSoftDeleteSchemaError(result.error)) {
+    result = await supabase.from("sales").select("seller_name").eq("id", id).maybeSingle();
+  }
+  const { data } = result;
   if (!data) return false;
+  if ("deleted_at" in data && data.deleted_at) return false;
   if (isAdmin(profile)) return true;
   return sellerNameMatches(profile, data.seller_name);
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const auth = await requireAuth();
   if ("error" in auth) return auth.error;
 
@@ -301,17 +448,27 @@ export async function GET() {
   }
 
   const supabase = getSupabaseServerClient();
+  const includeDeletedFinancialHistory = new URL(request.url).searchParams.get("includeDeleted") === "financial";
   let query = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+  if (!includeDeletedFinancialHistory) query = query.is("deleted_at", null);
   if (isSeller(auth.profile)) {
     query = query.eq("seller_name", auth.profile.sellerDisplayName);
   }
-  const { data, error } = await query;
+  let { data, error } = await query;
+
+  if (error && !includeDeletedFinancialHistory && isSalesSoftDeleteSchemaError(error)) {
+    let fallback = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+    if (isSeller(auth.profile)) fallback = fallback.eq("seller_name", auth.profile.sellerDisplayName);
+    const fallbackResult = await fallback;
+    data = fallbackResult.data;
+    error = fallbackResult.error;
+  }
 
   if (error) {
     return NextResponse.json({ configured: true, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ configured: true, sales: (data ?? []).map(mapSale) }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+  return NextResponse.json({ configured: true, sales: (data ?? []).map((row) => mapSale(row, isAdmin(auth.profile))) }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
 export async function POST(request: Request) {
@@ -323,7 +480,12 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json().catch(() => null) ?? {}) as Partial<SaleInput>;
+  if (body.salePlatform !== undefined && body.salePlatform !== null && body.salePlatform !== "" && !cleanPlatform(body.salePlatform)) {
+    return NextResponse.json({ error: "Selecione uma plataforma de venda válida." }, { status: 400 });
+  }
   const supabase = getSupabaseServerClient();
+  const campaign = await validateCampaign(supabase, body.campaignId);
+  if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
   const resolvedSeller = await resolveOperationalSeller(supabase, auth.profile, body.sellerId);
   if ("error" in resolvedSeller) return NextResponse.json({ error: resolvedSeller.error }, { status: 409 });
   const seller = resolvedSeller.seller;
@@ -338,7 +500,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: normalized.error }, { status: 400 });
   }
 
-  const insertPayload: Record<string, unknown> = { ...normalized.sale };
+  let manualFields: Record<string, unknown> = {};
+  if (normalized.sale.sale_platform === "manual") {
+    const manual = await resolveManualSaleFields(supabase, body, auth.user.id);
+    if ("error" in manual) {
+      const setupRequired = "setupRequired" in manual && Boolean(manual.setupRequired);
+      return NextResponse.json({ error: manual.error, setupRequired }, { status: setupRequired ? 409 : 400 });
+    }
+    manualFields = manual.fields;
+  }
+  const insertPayload: Record<string, unknown> = { ...normalized.sale, ...manualFields };
+  if (campaign.campaignId) insertPayload.campaign_id = campaign.campaignId;
   let { data, error } = await supabase
     .from("sales")
     .insert(insertPayload)
@@ -350,6 +522,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A migration 026 precisa ser aplicada antes de vincular vendedores às vendas." }, { status: 409 });
     } else if (isSalesPlatformConstraintError(error)) {
       return NextResponse.json({ error: "A migration 029 precisa ser aplicada antes de usar Venda Manual." }, { status: 409 });
+    } else if (isCampaignSchemaError(error)) {
+      return NextResponse.json({ error: "A migration 031 precisa ser aplicada antes de vincular campanhas." }, { status: 409 });
+    } else if (isProductDomainSchemaError(error)) {
+      return NextResponse.json({ error: "A migration 034 precisa ser aplicada antes de registrar custos da Venda Manual.", setupRequired: true }, { status: 409 });
     } else if (isSalesEnhancementSchemaError(error)) {
       return salesEnhancementSchemaErrorResponse();
     } else if (isOrderSchemaError(error)) {
@@ -387,7 +563,7 @@ export async function POST(request: Request) {
     notes: normalized.sale.notes || "Lead criado automaticamente a partir de uma venda lançada."
   });
 
-  return NextResponse.json({ sale: mapSale(data) }, { status: 201 });
+  return NextResponse.json({ sale: mapSale(data, isAdmin(auth.profile)) }, { status: 201 });
 }
 
 export async function PATCH(request: Request) {
@@ -410,7 +586,13 @@ export async function PATCH(request: Request) {
   }
 
   const body = applySellerScopeToBody(auth.profile, (await request.json().catch(() => ({}))) as Partial<SaleInput>);
+  if (body.salePlatform !== undefined && body.salePlatform !== null && body.salePlatform !== "" && !cleanPlatform(body.salePlatform)) {
+    return NextResponse.json({ error: "Selecione uma plataforma de venda válida." }, { status: 400 });
+  }
   const supabase = getSupabaseServerClient();
+  const currentDelivery = await supabase.from("sales").select("received_date,delivery_status,seller_id,sale_platform,created_at").eq("id", id).maybeSingle();
+  if (currentDelivery.error) return NextResponse.json({ error: "Não foi possível consultar os dados de entrega da venda." }, { status: 500 });
+  if (!currentDelivery.data) return NextResponse.json({ error: "Venda não encontrada." }, { status: 404 });
   const updates: Record<string, unknown> = {};
 
   if (body.customerName !== undefined) updates.customer_name = cleanText(body.customerName);
@@ -463,7 +645,7 @@ export async function PATCH(request: Request) {
     }
     updates.seller_name = sellerName;
   }
-  if (body.sellerId !== undefined) {
+  if (body.sellerId !== undefined && String(body.sellerId || "") !== String(currentDelivery.data.seller_id || "")) {
     const resolvedSeller = await resolveOperationalSeller(supabase, auth.profile, cleanText(body.sellerId));
     if ("error" in resolvedSeller) return NextResponse.json({ error: resolvedSeller.error }, { status: 409 });
     updates.seller_id = resolvedSeller.seller.id;
@@ -471,21 +653,64 @@ export async function PATCH(request: Request) {
     updates.commission_rate = resolvedSeller.seller.is_owner ? 0 : Number(resolvedSeller.seller.commission_percent || 0);
   }
   if (body.salePlatform !== undefined) updates.sale_platform = cleanPlatform(body.salePlatform);
+  if (body.salePlatform === "manual" || currentDelivery.data.sale_platform === "manual") {
+    let currentManual: Record<string, unknown> = { ...currentDelivery.data };
+    let canResolveManualFields = true;
+    if (currentDelivery.data.sale_platform === "manual") {
+      const currentProduct = await supabase.from("sales").select("product_id,product_kit_id,product_quantity,unit_cost_snapshot,total_product_cost_snapshot,manual_shipping_amount,manual_costs_created_by").eq("id", id).maybeSingle();
+      if (currentProduct.error) {
+        if (isProductDomainSchemaError(currentProduct.error)) {
+          const requestsNewCostData = Boolean(
+            cleanUuid(body.productId)
+            || cleanUuid(body.productKitId)
+            || toOptionalPositiveInteger(body.productQuantity)
+            || (body.manualShippingAmount !== undefined && body.manualShippingAmount !== null)
+          );
+          if (requestsNewCostData) {
+            return NextResponse.json({ error: "A migration 034 precisa ser aplicada para editar custos da Venda Manual.", setupRequired: true }, { status: 409 });
+          }
+          // Antes da 034, vendas manuais legadas continuam editáveis em seus
+          // campos operacionais; nenhum custo novo é inferido ou persistido.
+          canResolveManualFields = false;
+        } else {
+          return NextResponse.json({ error: "Não foi possível consultar os custos atuais da venda." }, { status: 500 });
+        }
+      } else {
+        currentManual = { ...currentManual, ...(currentProduct.data || {}) };
+      }
+    }
+    if (canResolveManualFields) {
+      const manual = await resolveManualSaleFields(supabase, body, auth.user.id, currentManual);
+      if ("error" in manual) {
+        const setupRequired = "setupRequired" in manual && Boolean(manual.setupRequired);
+        return NextResponse.json({ error: manual.error, setupRequired }, { status: setupRequired ? 409 : 400 });
+      }
+      Object.assign(updates, manual.fields);
+    }
+  }
+  if (body.campaignId !== undefined) {
+    const campaign = await validateCampaign(supabase, body.campaignId);
+    if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
+    updates.campaign_id = campaign.campaignId;
+  }
   if (body.paymentMethod !== undefined) updates.payment_method = cleanText(body.paymentMethod) || "PAGAMENTO ANTECIPADO";
   if (body.paymentStatus) updates.payment_status = body.paymentStatus;
   if (body.deliveryType !== undefined) updates.delivery_type = cleanText(body.deliveryType) || "Entrega padrão";
-  if (body.deliveryStatus) updates.delivery_status = body.deliveryStatus;
   if (body.orderStatus !== undefined) updates.order_status = primaryOrderStatus(body.orderStatus);
   if (body.orderTags !== undefined) updates.order_tags = cleanOrderTags(body.orderTags);
   if (body.orderStatusNote !== undefined) updates.order_status_note = cleanText(body.orderStatusNote);
   if (body.expectedPaymentDate !== undefined) updates.expected_payment_date = cleanText(body.expectedPaymentDate);
-  if (body.receivedDate !== undefined) updates.received_date = cleanText(body.receivedDate);
+  if (body.receivedDate !== undefined || body.deliveryStatus !== undefined) {
+    const receivedDate = body.receivedDate !== undefined ? cleanText(body.receivedDate) : cleanText(currentDelivery.data.received_date);
+    const deliveryStatus = receivedDate ? "delivered" : (body.deliveryStatus || currentDelivery.data.delivery_status || "pending");
+    if (deliveryStatus === "delivered" && !receivedDate) {
+      return NextResponse.json({ error: "Informe a data em que o cliente recebeu o pedido." }, { status: 400 });
+    }
+    if (body.receivedDate !== undefined) updates.received_date = receivedDate;
+    updates.delivery_status = deliveryStatus;
+  }
   if (body.paymentDate !== undefined) updates.payment_date = cleanText(body.paymentDate);
   if (body.saleTime !== undefined) updates.sale_time = cleanText(body.saleTime);
-  if (body.paymentStatus === "paid" && body.paymentDate === undefined) {
-    // Caixa entra na data em que o cliente pagou, nao na data antiga da venda.
-    updates.payment_date = String(new Date().toISOString()).slice(0, 10);
-  }
   if (body.notes !== undefined) updates.notes = cleanText(body.notes);
   updates.updated_at = new Date().toISOString();
 
@@ -506,6 +731,10 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "A migration 026 precisa ser aplicada antes de vincular vendedores às vendas." }, { status: 409 });
     } else if (isSalesPlatformConstraintError(error)) {
       return NextResponse.json({ error: "A migration 029 precisa ser aplicada antes de usar Venda Manual." }, { status: 409 });
+    } else if (isCampaignSchemaError(error)) {
+      return NextResponse.json({ error: "A migration 031 precisa ser aplicada antes de vincular campanhas." }, { status: 409 });
+    } else if (isProductDomainSchemaError(error)) {
+      return NextResponse.json({ error: "A migration 034 precisa ser aplicada antes de salvar custos da Venda Manual.", setupRequired: true }, { status: 409 });
     } else if (isSalesEnhancementSchemaError(error)) {
       return salesEnhancementSchemaErrorResponse();
     } else if (isOrderSchemaError(error)) {
@@ -532,7 +761,7 @@ export async function PATCH(request: Request) {
     }
   }
 
-  return NextResponse.json({ sale: mapSale(data) }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+  return NextResponse.json({ sale: mapSale(data, isAdmin(auth.profile)) }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
 export async function DELETE(request: Request) {
@@ -544,33 +773,57 @@ export async function DELETE(request: Request) {
   }
 
   const url = new URL(request.url);
-  const id = url.searchParams.get("id");
+  const id = cleanUuid(url.searchParams.get("id"));
 
   if (!id) {
-    return NextResponse.json({ error: "Informe o id da venda para excluir." }, { status: 400 });
-  }
-
-  if (!(await assertSaleAccess(id, auth.profile))) {
-    return forbiddenResponse("Você não pode excluir esta venda.");
+    return NextResponse.json({ error: "Informe um id de venda válido para excluir." }, { status: 400 });
   }
 
   const supabase = getSupabaseServerClient();
+  const saleLookup = await supabase.from("sales").select("id,seller_name,deleted_at").eq("id", id).maybeSingle();
+
+  if (saleLookup.error) {
+    if (isSalesSoftDeleteSchemaError(saleLookup.error)) {
+      return NextResponse.json(
+        { error: "A migration 033 precisa ser aplicada para ativar a exclusão operacional de vendas.", setupRequired: true },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ error: "Não foi possível consultar a venda antes da exclusão." }, { status: 500 });
+  }
+
+  if (!saleLookup.data || saleLookup.data.deleted_at) {
+    return NextResponse.json({ error: "Venda não encontrada." }, { status: 404 });
+  }
+
+  if (!isAdmin(auth.profile) && !sellerNameMatches(auth.profile, saleLookup.data.seller_name)) {
+    return forbiddenResponse("Você não pode excluir esta venda.");
+  }
+
+  const deletedAt = new Date().toISOString();
   const { data, error } = await supabase
     .from("sales")
-    .delete()
+    .update({ deleted_at: deletedAt, deleted_by: auth.user.id })
     .eq("id", id)
+    .is("deleted_at", null)
     .select("id");
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (isSalesSoftDeleteSchemaError(error)) {
+      return NextResponse.json(
+        { error: "A migration 033 precisa ser aplicada para ativar a exclusão operacional de vendas.", setupRequired: true },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ error: "Não foi possível excluir a venda." }, { status: 500 });
   }
 
   if (!data || data.length === 0) {
-    return NextResponse.json(
-      { error: "A venda não foi excluída no Supabase. Execute o SQL supabase/005_sales_delete_policy.sql uma vez e tente novamente." },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Venda não encontrada." }, { status: 404 });
   }
 
-  return NextResponse.json({ ok: true, deletedId: id }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+  return NextResponse.json(
+    { ok: true, deletedId: id, deletedAt },
+    { headers: { "Cache-Control": "no-store, max-age=0" } }
+  );
 }

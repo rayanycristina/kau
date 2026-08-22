@@ -1,15 +1,48 @@
-export const expenseCategories = ["traffic", "tools", "team", "taxes", "guarantees", "other"] as const;
+export const expenseCategories: string[] = ["traffic", "tools", "team", "taxes", "guarantees", "products", "shipping", "coproducers", "other"];
 
-export type ExpenseCategory = (typeof expenseCategories)[number];
+export type SystemExpenseCategory = "traffic" | "tools" | "team" | "taxes" | "guarantees" | "products" | "shipping" | "coproducers" | "other";
+export type ExpenseCategory = string;
 
-export const expenseCategoryLabels: Record<ExpenseCategory, string> = {
+export const expenseCategoryLabels: Record<string, string> = {
   traffic: "Tráfego",
   tools: "Ferramentas",
   team: "Equipe",
   taxes: "Impostos",
   guarantees: "Garantias",
+  products: "Produto / Fábrica",
+  shipping: "Frete / Logística",
+  coproducers: "Coprodutores",
   other: "Outros"
 };
+
+export type ExpenseCategoryDefinition = {
+  id: string;
+  name: string;
+  slug: string;
+  isSystem: boolean;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export const fallbackExpenseCategoryDefinitions: ExpenseCategoryDefinition[] = expenseCategories.map((slug) => ({
+  id: slug,
+  name: expenseCategoryLabels[slug],
+  slug,
+  isSystem: true,
+  isActive: true
+}));
+
+export function syncExpenseCategoryDefinitions(definitions: ExpenseCategoryDefinition[]) {
+  expenseCategories.splice(0, expenseCategories.length, ...definitions.filter((item) => item.isActive).map((item) => item.slug));
+  definitions.forEach((item) => { expenseCategoryLabels[item.slug] = item.name; });
+}
+
+export function expenseCategoryName(category: string, definitions: ExpenseCategoryDefinition[] = []) {
+  return definitions.find((item) => item.slug === category)?.name
+    || expenseCategoryLabels[category as SystemExpenseCategory]
+    || category;
+}
 
 export const trafficSources = ["Meta Ads", "Google Ads", "TikTok Ads", "Kwai Ads", "Outro"] as const;
 
@@ -49,6 +82,11 @@ export type Expense = {
   taxItems?: ExpenseTaxItem[];
   managedByGuarantee?: boolean;
   guaranteeId?: string;
+  managedByManualSaleCost?: boolean;
+  manualSaleCostObligationId?: string;
+  managedByParticipation?: boolean;
+  participationId?: string;
+  campaignId?: string;
 };
 
 export type ExpenseInput = {
@@ -60,4 +98,5 @@ export type ExpenseInput = {
   notes?: string;
   taxItems?: ExpenseTaxItem[];
   taxCalculationMode?: TaxCalculationMode;
+  campaignId?: string | null;
 };
