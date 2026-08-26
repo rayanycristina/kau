@@ -76,9 +76,9 @@ function defaultNextAction(status: LeadContactStatus) {
   return "Qualificar e conduzir para venda AlphaSin";
 }
 
-async function assertLeadAccess(id: string, profile: UserProfile) {
+async function assertLeadAccess(id: string, companyId: string, profile: UserProfile) {
   const supabase = getSupabaseServerClient();
-  const { data } = await supabase.from("leads").select("seller_name").eq("id", id).maybeSingle();
+  const { data } = await supabase.from("leads").select("seller_name").eq("company_id", companyId).eq("id", id).maybeSingle();
   if (!data) return false;
   if (isAdmin(profile)) return true;
   return sellerNameMatches(profile, data.seller_name);
@@ -93,7 +93,7 @@ export async function GET() {
   }
 
   const supabase = getSupabaseServerClient();
-  let query = supabase.from("leads").select("*").order("created_at", { ascending: false }).limit(200);
+  let query = supabase.from("leads").select("*").eq("company_id", auth.companyId).order("created_at", { ascending: false }).limit(200);
   if (isSeller(auth.profile)) {
     query = query.eq("seller_name", auth.profile.sellerDisplayName);
   }
@@ -124,7 +124,7 @@ export async function POST(request: Request) {
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase
     .from("leads")
-    .insert(normalized.lead)
+    .insert({ ...normalized.lead, company_id: auth.companyId })
     .select("*")
     .single();
 
@@ -150,7 +150,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Lead nao informado." }, { status: 400 });
   }
 
-  if (!(await assertLeadAccess(id, auth.profile))) {
+  if (!(await assertLeadAccess(id, auth.companyId, auth.profile))) {
     return forbiddenResponse("Você não pode editar este lead.");
   }
 
@@ -172,6 +172,7 @@ export async function PATCH(request: Request) {
   const { data, error } = await supabase
     .from("leads")
     .update(updates)
+    .eq("company_id", auth.companyId)
     .eq("id", id)
     .select("*")
     .single();

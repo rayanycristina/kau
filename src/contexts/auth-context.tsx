@@ -8,6 +8,7 @@ type AuthContextValue = {
   isLoading: boolean;
   isAdmin: boolean;
   isSeller: boolean;
+  isPlatformAdmin: boolean;
   refreshProfile: () => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -64,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       isAdmin: profile?.role === "admin" && profile.isActive,
       isSeller: profile?.role === "seller" && profile.isActive,
+      isPlatformAdmin: Boolean(profile?.isPlatformAdmin),
       refreshProfile,
       signOut
     }),

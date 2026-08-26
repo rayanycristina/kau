@@ -158,7 +158,7 @@ const initialSaleForm: SaleForm = {
   operationCommissionAmount: "",
   operationCommissionAmountCents: 0,
   operationCommissionPercent: null,
-  sellerName: "Rayany Cristina Feitosa da Silva",
+  sellerName: "",
   sellerId: null,
   commissionPercent: "0",
   saleType: "pad",

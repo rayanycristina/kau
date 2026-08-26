@@ -21,7 +21,7 @@ export async function GET(_request: Request, context: RouteContext) {
   const id = validUuid(rawId);
   if (!id) return NextResponse.json({ error: "Produto inválido." }, { status: 400 });
 
-  const detail = await loadProductDetail(getSupabaseAdminClient(), id);
+  const detail = await loadProductDetail(getSupabaseAdminClient(), id, auth.companyId);
   if ("error" in detail) {
     if (isProductSetupError(detail.error)) return productSetupResponse();
     return NextResponse.json({ error: detail.error.message }, { status: 500 });
@@ -76,7 +76,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!Object.keys(updates).length) return NextResponse.json({ error: "Nenhuma alteração válida foi informada." }, { status: 400 });
 
   const admin = getSupabaseAdminClient();
-  const result = await admin.from("products").update(updates).eq("id", id).select(productSelect).maybeSingle();
+  const result = await admin.from("products").update(updates).eq("company_id", auth.companyId).eq("id", id).select(productSelect).maybeSingle();
   if (result.error) {
     if (isProductSetupError(result.error)) return productSetupResponse();
     if (result.error.code === "23505") return NextResponse.json({ error: "Já existe um produto com esse SKU." }, { status: 409 });
@@ -84,7 +84,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
   if (!result.data) return NextResponse.json({ error: "Produto não encontrado." }, { status: 404 });
 
-  const detail = await loadProductDetail(admin, id);
+  const detail = await loadProductDetail(admin, id, auth.companyId);
   if ("error" in detail) {
     if (isProductSetupError(detail.error)) return productSetupResponse();
     return NextResponse.json({ error: detail.error.message }, { status: 500 });

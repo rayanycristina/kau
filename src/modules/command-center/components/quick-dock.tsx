@@ -133,7 +133,7 @@ const initialSale: SaleInput = {
   productName: "AlphaSin",
   quantity: 1,
   totalAmount: 0,
-  sellerName: "Rayany Cristina Feitosa da Silva",
+  sellerName: "",
   sellerId: null,
   commissionRate: 0,
   paymentMethod: "Pix",
@@ -154,7 +154,7 @@ const initialLead: LeadInput = {
   temperature: "hot",
   contactStatus: "new",
   priority: "high",
-  sellerName: "Rayany Cristina Feitosa da Silva",
+  sellerName: "",
   nextAction: "Qualificar e conduzir para venda AlphaSin",
   nextActionAt: "",
   estimatedValue: 197,
@@ -189,7 +189,10 @@ export function QuickDock() {
         const loaded = (payload.sellers || []) as SellerProfile[];
         setSellers(loaded);
         const owner = loaded.find((seller) => seller.isOwner) ?? loaded[0];
-        if (owner && !isSeller) setSale((current) => ({ ...current, sellerId: owner.id, sellerName: owner.name, commissionRate: owner.isOwner ? 0 : commissionPercentToRate(owner.commissionPercent) }));
+        if (owner && !isSeller) {
+          setSale((current) => ({ ...current, sellerId: owner.id, sellerName: owner.name, commissionRate: owner.isOwner ? 0 : commissionPercentToRate(owner.commissionPercent) }));
+          setLead((current) => ({ ...current, sellerName: owner.name }));
+        }
       });
   }, [isSeller]);
 
@@ -251,7 +254,8 @@ export function QuickDock() {
       window.dispatchEvent(new Event("kau:financial-data-changed"));
       setCompletedAction(`Venda registrada: ${savedSale.customerName} · ${formatBRL(savedSale.totalAmount)}`);
       setActiveAction(null);
-      setSale(initialSale);
+      const owner = sellers.find((seller) => seller.isOwner) ?? sellers[0];
+      setSale(owner ? { ...initialSale, sellerId: owner.id, sellerName: owner.name, commissionRate: owner.isOwner ? 0 : commissionPercentToRate(owner.commissionPercent) } : initialSale);
       window.setTimeout(() => setCompletedAction(null), 3400);
     } catch (error) {
       setSaleError(error instanceof Error ? error.message : "Erro desconhecido ao registrar venda.");
@@ -282,7 +286,8 @@ export function QuickDock() {
       const savedLead = payload.lead as LeadRecord;
       setCompletedAction(`Lead cadastrado: ${savedLead.customerName} · ${savedLead.customerPhone}`);
       setActiveAction(null);
-      setLead(initialLead);
+      const owner = sellers.find((seller) => seller.isOwner) ?? sellers[0];
+      setLead(owner ? { ...initialLead, sellerName: owner.name } : initialLead);
       window.setTimeout(() => setCompletedAction(null), 3400);
     } catch (error) {
       setLeadError(error instanceof Error ? error.message : "Erro desconhecido ao cadastrar lead.");

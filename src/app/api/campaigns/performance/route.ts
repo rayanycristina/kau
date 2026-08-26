@@ -51,10 +51,10 @@ export async function GET(request: Request) {
   const end = isoDate(url.searchParams.get("end"), defaultEnd);
   const admin = getSupabaseAdminClient();
   const [accountResult, campaignResult, initialSaleResult, expenseResult] = await Promise.all([
-    admin.from("ad_accounts").select("*").order("name"),
-    admin.from("campaigns").select("*").order("name"),
-    admin.from("sales").select("id,campaign_id,total_amount,operation_commission_amount,operation_commission_percent,commission_amount,payment_status,delivery_status,received_date,order_status,product_name,sale_platform,seller_name,state,created_at").is("deleted_at", null).gte("created_at", `${start}T00:00:00`).lte("created_at", `${end}T23:59:59.999`),
-    admin.from("expenses").select("id,campaign_id,description,amount,expense_date,category,source").eq("category", "traffic").gte("expense_date", start).lte("expense_date", end)
+    admin.from("ad_accounts").select("*").eq("company_id", auth.companyId).order("name"),
+    admin.from("campaigns").select("*").eq("company_id", auth.companyId).order("name"),
+    admin.from("sales").select("id,campaign_id,total_amount,operation_commission_amount,operation_commission_percent,commission_amount,payment_status,delivery_status,received_date,order_status,product_name,sale_platform,seller_name,state,created_at").eq("company_id", auth.companyId).is("deleted_at", null).gte("created_at", `${start}T00:00:00`).lte("created_at", `${end}T23:59:59.999`),
+    admin.from("expenses").select("id,campaign_id,description,amount,expense_date,category,source").eq("company_id", auth.companyId).eq("category", "traffic").gte("expense_date", start).lte("expense_date", end)
   ]);
   const saleResult = initialSaleResult;
   if (saleResult.error && softDeleteSchemaMissing(saleResult.error)) {
@@ -62,7 +62,7 @@ export async function GET(request: Request) {
   }
   const error = accountResult.error || campaignResult.error || saleResult.error || expenseResult.error;
   if (error && missing(error)) {
-    const fallback = await admin.from("expenses").select("id,description,amount,expense_date,category,source").eq("category", "traffic").gte("expense_date", start).lte("expense_date", end);
+    const fallback = await admin.from("expenses").select("id,description,amount,expense_date,category,source").eq("company_id", auth.companyId).eq("category", "traffic").gte("expense_date", start).lte("expense_date", end);
     if (fallback.error) return NextResponse.json(emptyResponse());
     const historicalTraffic = (fallback.data || []) as Record<string, unknown>[];
     return NextResponse.json({ ...emptyResponse(), attribution: attributionFor(historicalTraffic, new Map()) }, { headers: { "Cache-Control": "no-store, max-age=0" } });

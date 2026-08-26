@@ -9,7 +9,7 @@ const map = (row: Record<string, unknown>) => { const relation = Array.isArray(r
 
 export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
   const auth = await requireAdmin(); if ("error" in auth) return auth.error; const { id } = await context.params;
-  const result = await getSupabaseAdminClient().from("product_coproducer_rules").select(ruleSelect).eq("product_id", id).order("effective_from", { ascending: false });
+  const result = await getSupabaseAdminClient().from("product_coproducer_rules").select(ruleSelect).eq("company_id", auth.companyId).eq("product_id", id).order("effective_from", { ascending: false });
   if (result.error) return /product_coproducer_rules|schema cache/i.test(result.error.message) ? NextResponse.json({ setupRequired: true, rules: [] }) : NextResponse.json({ error: result.error.message }, { status: 500 });
   return NextResponse.json({ setupRequired: false, rules: (result.data || []).map((row) => map(row as Record<string, unknown>)) });
 }
@@ -18,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const auth = await requireAdmin(); if ("error" in auth) return auth.error; const { id } = await context.params; const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const effectiveFrom = date(body.effectiveFrom); const type = body.calculationType === "fixed" ? "fixed" : "percent"; const amount = money(type === "fixed" ? body.fixedAmount : body.percent);
   if (!body.coproducerId || !effectiveFrom || !amount) return NextResponse.json({ error: "Preencha coprodutor, regra e vigência." }, { status: 400 });
-  const insert = { product_id: id, coproducer_id: body.coproducerId, role: ["partner","producer"].includes(String(body.role)) ? body.role : "coproducer", calculation_type: type, calculation_basis: "operation_revenue", percent: type === "percent" ? amount : null, fixed_amount: type === "fixed" ? amount : null, effective_from: effectiveFrom, status: "active", created_by: auth.user.id };
+  const insert = { company_id: auth.companyId, product_id: id, coproducer_id: body.coproducerId, role: ["partner","producer"].includes(String(body.role)) ? body.role : "coproducer", calculation_type: type, calculation_basis: "operation_revenue", percent: type === "percent" ? amount : null, fixed_amount: type === "fixed" ? amount : null, effective_from: effectiveFrom, status: "active", created_by: auth.user.id };
   const result = await getSupabaseAdminClient().from("product_coproducer_rules").insert(insert).select(ruleSelect).single();
   if (result.error) return NextResponse.json({ error: result.error.code === "23505" ? "Já existe uma regra para este coprodutor nesta vigência." : result.error.message }, { status: 409 });
   return NextResponse.json({ rule: map(result.data as Record<string, unknown>) }, { status: 201 });
@@ -27,7 +27,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const auth = await requireAdmin(); if ("error" in auth) return auth.error; const { id } = await context.params; const body = await request.json().catch(() => ({})) as Record<string, unknown>; const effectiveTo = date(body.effectiveTo);
   if (!body.ruleId || !effectiveTo) return NextResponse.json({ error: "Informe regra e data de encerramento." }, { status: 400 });
-  const result = await getSupabaseAdminClient().from("product_coproducer_rules").update({ status: "ended", effective_to: effectiveTo }).eq("id", body.ruleId).eq("product_id", id).select(ruleSelect).maybeSingle();
+  const result = await getSupabaseAdminClient().from("product_coproducer_rules").update({ status: "ended", effective_to: effectiveTo }).eq("company_id", auth.companyId).eq("id", body.ruleId).eq("product_id", id).select(ruleSelect).maybeSingle();
   if (result.error) return NextResponse.json({ error: result.error.message }, { status: 409 });
   return NextResponse.json({ rule: result.data ? map(result.data as Record<string, unknown>) : null });
 }

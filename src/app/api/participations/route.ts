@@ -10,11 +10,11 @@ export async function GET(request: Request) {
   const auth = await requireAdmin(); if ("error" in auth) return auth.error;
   const status = new URL(request.url).searchParams.get("status") as ParticipationStatus | null;
   if (status && !statuses.has(status)) return NextResponse.json({ error: "Status inválido." }, { status: 400 });
-  const admin = getSupabaseAdminClient(); let query = admin.from("sale_coproducer_obligations").select("*").order("created_at", { ascending: false }); if (status) query = query.eq("status", status);
+  const admin = getSupabaseAdminClient(); let query = admin.from("sale_coproducer_obligations").select("*").eq("company_id", auth.companyId).order("created_at", { ascending: false }); if (status) query = query.eq("status", status);
   const result = await query;
   if (result.error) return /sale_coproducer_obligations|schema cache/i.test(result.error.message) ? NextResponse.json({ setupRequired: true, participations: [], pendingTotal: 0 }) : NextResponse.json({ error: result.error.message }, { status: 500 });
   const rows = (result.data || []) as Record<string, unknown>[]; const ids = [...new Set(rows.map((row) => String(row.sale_id)))]; const sales = new Map<string, Record<string, unknown>>();
-  if (ids.length) { const saleResult = await admin.from("sales").select("id,customer_name,product_name,created_at,deleted_at").in("id", ids); if (saleResult.error) return NextResponse.json({ error: "Não foi possível carregar as vendas vinculadas." }, { status: 500 }); (saleResult.data || []).forEach((sale) => sales.set(String(sale.id), sale as Record<string, unknown>)); }
+  if (ids.length) { const saleResult = await admin.from("sales").select("id,customer_name,product_name,created_at,deleted_at").eq("company_id", auth.companyId).in("id", ids); if (saleResult.error) return NextResponse.json({ error: "Não foi possível carregar as vendas vinculadas." }, { status: 500 }); (saleResult.data || []).forEach((sale) => sales.set(String(sale.id), sale as Record<string, unknown>)); }
   const participations = rows.map((row) => map(row, sales)).filter((item) => item.status !== "pending" || !item.sale.deletedAt);
   return NextResponse.json({ setupRequired: false, participations, pendingTotal: participations.filter((item) => item.status === "pending").reduce((sum, item) => sum + item.amount, 0) }, { headers: { "Cache-Control": "no-store" } });
 }

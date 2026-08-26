@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronDown, ChevronLeft, Gauge, Home, LogOut, Menu, PackageSearch, ReceiptText, ShoppingCart, UserCog, UsersRound, Truck } from "lucide-react";
+import { ChevronDown, ChevronLeft, Gauge, Home, LogOut, Menu, PackageSearch, ReceiptText, ShoppingCart, UserCog, UsersRound, Truck, ShieldCheck } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
@@ -36,7 +36,7 @@ const mainItemClass =
 
 export function Navigation() {
   const pathname = usePathname();
-  const { profile, isLoading, isAdmin, signOut } = useAuth();
+  const { profile, isLoading, isAdmin, isPlatformAdmin, signOut } = useAuth();
   const financeActive = pathname.startsWith("/finance/");
   const productsActive = pathname.startsWith("/products");
   const [financeOpen, setFinanceOpen] = useState(false);
@@ -255,6 +255,7 @@ export function Navigation() {
       </nav>
 
       <div className="mt-4 shrink-0">
+        {isPlatformAdmin ? <Link href="/platform" className="mb-2 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-cyan/20 bg-cyan/[.07] text-xs font-black uppercase tracking-[.1em] text-cyan transition hover:bg-cyan/10"><ShieldCheck size={15}/> Admin</Link> : null}
         <div className="rounded-2xl border border-white/10 bg-white/[.035] p-4 shadow-panel">
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-money/20 bg-money/10 text-sm font-black text-money">
@@ -269,7 +270,8 @@ export function Navigation() {
               ) : (
                 <>
                   <p className="truncate text-sm font-bold">{profile?.fullName || "Usuário"}</p>
-                  <p className="truncate text-xs text-white/50">{profile?.role === "admin" ? "Administradora" : profile?.sellerDisplayName || "Vendedora"}</p>
+                  <p className="truncate text-xs font-semibold text-money/70">{profile?.company?.name || "Empresa não identificada"}</p>
+                  <p className="truncate text-[10px] text-white/42">{profile?.role === "admin" ? "Administração da empresa" : profile?.sellerDisplayName || "Vendedor"}</p>
                 </>
               )}
             </div>

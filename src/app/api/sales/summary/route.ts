@@ -97,7 +97,7 @@ export async function GET() {
 
   const supabase = getSupabaseServerClient();
   const today = new Date().toISOString().slice(0, 10);
-  let query = supabase.from("sales").select("*").is("deleted_at", null).order("created_at", { ascending: false }).limit(500);
+  let query = supabase.from("sales").select("*").eq("company_id", auth.companyId).is("deleted_at", null).order("created_at", { ascending: false }).limit(500);
   if (isSeller(auth.profile)) {
     query = query.eq("seller_name", auth.profile.sellerDisplayName);
   }

@@ -28,13 +28,27 @@ export async function GET() {
   }
 
   const admin = getSupabaseAdminClient();
-  const { data, error } = await admin.from("user_profiles").select("*").order("created_at", { ascending: false });
+  const membershipResult = await admin
+    .from("company_memberships")
+    .select("user_id,role,is_active,user_profiles(*)")
+    .eq("company_id", auth.companyId)
+    .order("created_at", { ascending: false });
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (membershipResult.error) {
+    return NextResponse.json({ error: membershipResult.error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ users: (data ?? []).map((row) => mapUserProfile(row)) });
+  const users = (membershipResult.data ?? []).flatMap((row) => {
+    const relation = Array.isArray(row.user_profiles) ? row.user_profiles[0] : row.user_profiles;
+    if (!relation) return [];
+    const profile = mapUserProfile(relation);
+    profile.company = auth.company;
+    profile.companyRole = row.role;
+    profile.role = row.role === "seller" || row.role === "member" ? "seller" : "admin";
+    profile.isActive = Boolean(row.is_active) && profile.isActive;
+    return [profile];
+  });
+  return NextResponse.json({ users });
 }
 
 export async function POST(request: Request) {
@@ -95,5 +109,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: profileError?.message || "Usuário criado, mas o perfil não foi salvo." }, { status: 500 });
   }
 
-  return NextResponse.json({ user: mapUserProfile(profile) }, { status: 201 });
+  const membershipResult = await admin.from("company_memberships").insert({
+    company_id: auth.companyId,
+    user_id: createdUser.user.id,
+    role,
+    is_active: true
+  });
+  if (membershipResult.error) {
+    await admin.auth.admin.deleteUser(createdUser.user.id);
+    return NextResponse.json({ error: membershipResult.error.message }, { status: 409 });
+  }
+
+  const mapped = mapUserProfile(profile);
+  mapped.company = auth.company;
+  mapped.companyRole = role;
+  return NextResponse.json({ user: mapped }, { status: 201 });
 }

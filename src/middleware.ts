@@ -67,10 +67,29 @@ export async function middleware(request: NextRequest) {
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false }
     });
-    const { data: profile } = await admin.from("user_profiles").select("role,is_active").eq("id", user.id).maybeSingle();
+    const [{ data: profile }, { data: membership }, { data: platformAdmin }] = await Promise.all([
+      admin.from("user_profiles").select("is_active").eq("id", user.id).maybeSingle(),
+      admin.from("company_memberships").select("role,is_active,companies(status)").eq("user_id", user.id).eq("is_active", true).maybeSingle(),
+      admin.from("platform_admins").select("is_active").eq("user_id", user.id).eq("is_active", true).maybeSingle()
+    ]);
 
-    const isActiveAdmin = profile?.role === "admin" && profile.is_active;
-    const isActiveSeller = profile?.role === "seller" && profile.is_active;
+    const company = Array.isArray(membership?.companies) ? membership.companies[0] : membership?.companies;
+    const companyActive = profile?.is_active && membership?.is_active && company?.status === "active";
+    const isActiveAdmin = companyActive && (membership?.role === "owner" || membership?.role === "admin");
+    const isActiveSeller = companyActive && (membership?.role === "seller" || membership?.role === "member");
+
+    if (!companyActive && !pathname.startsWith("/company-suspended") && !(pathname.startsWith("/platform") && platformAdmin?.is_active)) {
+      const unavailableUrl = request.nextUrl.clone();
+      unavailableUrl.pathname = "/company-suspended";
+      unavailableUrl.search = "";
+      return NextResponse.redirect(unavailableUrl);
+    }
+    if (companyActive && pathname.startsWith("/company-suspended")) {
+      const homeUrl = request.nextUrl.clone();
+      homeUrl.pathname = "/";
+      homeUrl.search = "";
+      return NextResponse.redirect(homeUrl);
+    }
 
     if (isActiveSeller && !pathname.startsWith(sellerHomePath)) {
       const salesUrl = request.nextUrl.clone();
@@ -84,6 +103,12 @@ export async function middleware(request: NextRequest) {
       salesUrl.pathname = sellerHomePath;
       salesUrl.search = "";
       return NextResponse.redirect(salesUrl);
+    }
+    if (pathname.startsWith("/platform") && !platformAdmin?.is_active) {
+      const homeUrl = request.nextUrl.clone();
+      homeUrl.pathname = "/";
+      homeUrl.search = "";
+      return NextResponse.redirect(homeUrl);
     }
   }
 

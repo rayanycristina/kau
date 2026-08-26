@@ -14,8 +14,8 @@ export async function GET(request: Request) {
   const auth = await requireAdmin(); if ("error" in auth) return auth.error;
   if (!hasSupabaseAdminConfig()) return NextResponse.json({ configured: false, setupRequired: true, guarantees: [], settings: [] });
   const admin = getSupabaseAdminClient(); const url = new URL(request.url); const saleId = url.searchParams.get("saleId");
-  let query = admin.from("postpaid_guarantees").select("*,sales(*)").order("created_at", { ascending: false }); if (saleId) query = query.eq("sale_id", saleId);
-  const [{ data, error }, settingsResult] = await Promise.all([query, admin.from("guarantee_settings").select("*").order("effective_from", { ascending: false })]);
+  let query = admin.from("postpaid_guarantees").select("*,sales(*)").eq("company_id", auth.companyId).order("created_at", { ascending: false }); if (saleId) query = query.eq("sale_id", saleId);
+  const [{ data, error }, settingsResult] = await Promise.all([query, admin.from("guarantee_settings").select("*").eq("company_id", auth.companyId).order("effective_from", { ascending: false })]);
   if (missing(error) || missing(settingsResult.error)) return NextResponse.json({ configured: true, setupRequired: true, guarantees: [], settings: [], message: "A migration 024 precisa ser aplicada para ativar Garantias pós-pagas." });
   if (error || settingsResult.error) return NextResponse.json({ error: "Não foi possível carregar as garantias." }, { status: 500 });
   return NextResponse.json({ configured: true, setupRequired: false, guarantees: ((data || []) as Record<string, unknown>[]).map(map), settings: ((settingsResult.data || []) as Record<string, unknown>[]).map(mapSetting) });
@@ -25,16 +25,18 @@ export async function POST(request: Request) {
   const auth = await requireAdmin(); if ("error" in auth) return auth.error;
   const body = await request.json().catch(() => ({})); const saleId = String(body.saleId || ""); const type = body.guaranteeType === "mandatory" ? "mandatory" : "conditional"; const amount = Number(body.guaranteeAmount);
   if (!saleId || !Number.isFinite(amount) || amount <= 0) return NextResponse.json({ error: "Informe venda, tipo e valor válidos." }, { status: 400 });
-  const admin = getSupabaseAdminClient(); const existing = await admin.from("postpaid_guarantees").select("paid_at").eq("sale_id", saleId).maybeSingle();
+  const admin = getSupabaseAdminClient(); const sale = await admin.from("sales").select("id").eq("company_id", auth.companyId).eq("id", saleId).maybeSingle();
+  if (!sale.data) return NextResponse.json({ error: "Venda não encontrada nesta empresa." }, { status: 404 });
+  const existing = await admin.from("postpaid_guarantees").select("paid_at").eq("company_id", auth.companyId).eq("sale_id", saleId).maybeSingle();
   if (existing.error && missing(existing.error)) return NextResponse.json({ error: "A migration 024 precisa ser aplicada.", setupRequired: true }, { status: 409 });
   if (existing.data?.paid_at) return NextResponse.json({ error: "Estorne o pagamento antes de alterar esta garantia." }, { status: 409 });
-  const { data, error } = await admin.from("postpaid_guarantees").upsert({ sale_id: saleId, guarantee_type: type, guarantee_amount: Math.round(amount * 100) / 100, is_active: body.isActive !== false, updated_by: auth.user.id }, { onConflict: "sale_id" }).select("id").single();
+  const { data, error } = await admin.from("postpaid_guarantees").upsert({ company_id: auth.companyId, sale_id: saleId, guarantee_type: type, guarantee_amount: Math.round(amount * 100) / 100, is_active: body.isActive !== false, updated_by: auth.user.id }, { onConflict: "sale_id" }).select("id").single();
   if (error) return NextResponse.json({ error: "Não foi possível sincronizar a garantia." }, { status: 500 }); return NextResponse.json({ guarantee: data });
 }
 
 export async function PATCH(request: Request) {
   const auth = await requireAdmin(); if ("error" in auth) return auth.error; const body = await request.json().catch(() => ({})); const id = String(body.id || ""); const amount = Number(body.defaultAmount);
   if (!id || !Number.isFinite(amount) || amount <= 0) return NextResponse.json({ error: "Configuração inválida." }, { status: 400 });
-  const { error } = await getSupabaseAdminClient().from("guarantee_settings").update({ default_amount: Math.round(amount * 100) / 100, is_active: Boolean(body.isActive), effective_from: body.effectiveFrom }).eq("id", id);
+  const { error } = await getSupabaseAdminClient().from("guarantee_settings").update({ default_amount: Math.round(amount * 100) / 100, is_active: Boolean(body.isActive), effective_from: body.effectiveFrom }).eq("company_id", auth.companyId).eq("id", id);
   if (error) return NextResponse.json({ error: "Não foi possível atualizar a configuração." }, { status: 500 }); return NextResponse.json({ success: true });
 }

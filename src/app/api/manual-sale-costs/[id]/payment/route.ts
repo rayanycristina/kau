@@ -73,9 +73,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   const admin = getSupabaseAdminClient();
+  const obligation = await admin.from("manual_sale_cost_obligations").select("id").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
+  if (!obligation.data) return NextResponse.json({ error: "Custo a pagar não encontrado." }, { status: 404 });
   const timestampCapability = await admin
     .from("manual_sale_cost_obligations")
     .select("paid_at_timestamp")
+    .eq("company_id", auth.companyId)
     .limit(1);
   if (timestampCapability.error && !isMissingTimestampColumn(timestampCapability.error)) {
     console.error("[manual-sale-cost-payment] Falha ao verificar suporte a timestamp", {

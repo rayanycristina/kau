@@ -35,19 +35,19 @@ function cleanUuid(value: unknown) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null;
 }
 
-async function validateCampaign(admin: ReturnType<typeof getSupabaseAdminClient>, category: string, value: unknown) {
+async function validateCampaign(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, category: string, value: unknown) {
   if (value === undefined || value === null || value === "") return { campaignId: null } as const;
   if (category !== "traffic") return { error: "Somente despesas de Tráfego podem ser vinculadas a campanhas." } as const;
   const campaignId = cleanUuid(value);
   if (!campaignId) return { error: "Selecione uma campanha válida." } as const;
-  const result = await admin.from("campaigns").select("id,status").eq("id", campaignId).maybeSingle();
+  const result = await admin.from("campaigns").select("id,status").eq("company_id", companyId).eq("id", campaignId).maybeSingle();
   if (result.error) return { error: /campaigns|schema cache/i.test(result.error.message) ? "A migration 031 precisa ser aplicada antes de vincular campanhas." : result.error.message } as const;
   if (!result.data || result.data.status === "archived") return { error: "A campanha selecionada não está disponível." } as const;
   return { campaignId } as const;
 }
 
-async function categoryAvailable(admin: ReturnType<typeof getSupabaseAdminClient>, category: string) {
-  const result = await admin.from("expense_categories").select("slug,is_active").eq("slug", category).maybeSingle();
+async function categoryAvailable(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, category: string) {
+  const result = await admin.from("expense_categories").select("slug,is_active").eq("company_id", companyId).eq("slug", category).maybeSingle();
   const setupRequired = result.error?.code === "42P01" || /expense_categories|schema cache/i.test(String(result.error?.message || ""));
   return { available: Boolean(result.data?.is_active) || (setupRequired && expenseCategories.includes(category)), setupRequired, error: setupRequired ? null : result.error };
 }
@@ -158,20 +158,20 @@ const managedExpenseMessage = "Esta despesa é gerenciada pelo módulo Garantias
 const managedManualSaleCostMessage = "Esta despesa é gerenciada pelos custos da Venda Manual e não pode ser alterada diretamente.";
 const managedParticipationMessage = "Esta despesa é gerenciada pelo módulo Participações e não pode ser alterada diretamente.";
 
-async function linkedGuarantee(admin: ReturnType<typeof getSupabaseAdminClient>, expenseId: string) {
-  const result = await admin.from("postpaid_guarantees").select("id").eq("expense_id", expenseId).maybeSingle();
+async function linkedGuarantee(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, expenseId: string) {
+  const result = await admin.from("postpaid_guarantees").select("id").eq("company_id", companyId).eq("expense_id", expenseId).maybeSingle();
   if (result.error && isMissingGuaranteeTable(result.error)) return { id: null, unavailable: true, error: null };
   return { id: result.data?.id ? String(result.data.id) : null, unavailable: false, error: result.error };
 }
 
-async function linkedManualSaleCost(admin: ReturnType<typeof getSupabaseAdminClient>, expenseId: string) {
-  const result = await admin.from("manual_sale_cost_obligations").select("id").eq("expense_id", expenseId).maybeSingle();
+async function linkedManualSaleCost(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, expenseId: string) {
+  const result = await admin.from("manual_sale_cost_obligations").select("id").eq("company_id", companyId).eq("expense_id", expenseId).maybeSingle();
   if (result.error && isMissingManualSaleCostTable(result.error)) return { id: null, unavailable: true, error: null };
   return { id: result.data?.id ? String(result.data.id) : null, unavailable: false, error: result.error };
 }
 
-async function linkedParticipation(admin: ReturnType<typeof getSupabaseAdminClient>, expenseId: string) {
-  const result = await admin.from("sale_coproducer_obligations").select("id").eq("expense_id", expenseId).maybeSingle();
+async function linkedParticipation(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, expenseId: string) {
+  const result = await admin.from("sale_coproducer_obligations").select("id").eq("company_id", companyId).eq("expense_id", expenseId).maybeSingle();
   if (result.error && isMissingParticipationTable(result.error)) return { id: null, error: null };
   return { id: result.data?.id ? String(result.data.id) : null, error: result.error };
 }
@@ -184,9 +184,9 @@ function taxesUnavailableResponse() {
   return NextResponse.json({ error: "A estrutura de tributos ainda precisa da migration supabase/023_expense_tax_items.sql.", taxSetupRequired: true }, { status: 409 });
 }
 
-function taxPayload(expenseId: string, items: Array<Omit<ExpenseTaxItem, "id" | "createdAt" | "enabled">>) {
+function taxPayload(companyId: string, expenseId: string, items: Array<Omit<ExpenseTaxItem, "id" | "createdAt" | "enabled">>) {
   return items.map((item) => ({
-    expense_id: expenseId, tax_name: item.taxName, tax_code: item.taxCode, rate_percent: item.ratePercent,
+    company_id: companyId, expense_id: expenseId, tax_name: item.taxName, tax_code: item.taxCode, rate_percent: item.ratePercent,
     calculation_base: item.calculationBase, amount: item.amount, calculation_mode: item.calculationMode,
     is_auto_generated: item.isAutoGenerated
   }));
@@ -203,7 +203,7 @@ export async function GET(request: Request) {
   const category = cleanCategory(url.searchParams.get("category"));
   const admin = getSupabaseAdminClient();
   const buildQuery = (selection: string) => {
-    let query = admin.from("expenses").select(selection).order("expense_date", { ascending: false }).order("created_at", { ascending: false });
+    let query = admin.from("expenses").select(selection).eq("company_id", auth.companyId).order("expense_date", { ascending: false }).order("created_at", { ascending: false });
     if (start) query = query.gte("expense_date", start);
     if (end) query = query.lte("expense_date", end);
     if (category) query = query.eq("category", category);
@@ -227,9 +227,9 @@ export async function GET(request: Request) {
   if (expenses.length) {
     const expenseIds = expenses.map((item) => item.id);
     const [guaranteeLinks, manualSaleCostLinks, participationLinks] = await Promise.all([
-      admin.from("postpaid_guarantees").select("id,expense_id").in("expense_id", expenseIds),
-      admin.from("manual_sale_cost_obligations").select("id,expense_id").in("expense_id", expenseIds),
-      admin.from("sale_coproducer_obligations").select("id,expense_id").in("expense_id", expenseIds)
+      admin.from("postpaid_guarantees").select("id,expense_id").eq("company_id", auth.companyId).in("expense_id", expenseIds),
+      admin.from("manual_sale_cost_obligations").select("id,expense_id").eq("company_id", auth.companyId).in("expense_id", expenseIds),
+      admin.from("sale_coproducer_obligations").select("id,expense_id").eq("company_id", auth.companyId).in("expense_id", expenseIds)
     ]);
     if (!guaranteeLinks.error) {
       const byExpense = new Map((guaranteeLinks.data ?? []).map((link) => [String(link.expense_id), String(link.id)]));
@@ -272,22 +272,22 @@ export async function POST(request: Request) {
   if ("error" in normalized) return NextResponse.json({ error: normalized.error }, { status: 400 });
 
   const admin = getSupabaseAdminClient();
-  const selectedCategory = await categoryAvailable(admin, normalized.expense.category);
+  const selectedCategory = await categoryAvailable(admin, auth.companyId, normalized.expense.category);
   if (selectedCategory.error) return NextResponse.json({ error: selectedCategory.error.message }, { status: 500 });
   if (!selectedCategory.available) return NextResponse.json({ error: "Selecione uma categoria ativa." }, { status: 400 });
-  const campaign = await validateCampaign(admin, normalized.expense.category, body.campaignId);
+  const campaign = await validateCampaign(admin, auth.companyId, normalized.expense.category, body.campaignId);
   if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
   if (normalized.taxItems.length) {
-    const check = await admin.from("expense_tax_items").select("id").limit(1);
+    const check = await admin.from("expense_tax_items").select("id").eq("company_id", auth.companyId).limit(1);
     if (check.error) return isMissingTaxTable(check.error) ? taxesUnavailableResponse() : NextResponse.json({ error: check.error.message }, { status: 500 });
   }
 
-  const { data, error } = await admin.from("expenses").insert({ ...normalized.expense, ...(campaign.campaignId ? { campaign_id: campaign.campaignId } : {}), created_by: auth.user.id }).select("*").single();
+  const { data, error } = await admin.from("expenses").insert({ company_id: auth.companyId, ...normalized.expense, ...(campaign.campaignId ? { campaign_id: campaign.campaignId } : {}), created_by: auth.user.id }).select("*").single();
   if (error) return isMissingExpensesTable(error) ? expensesUnavailableResponse() : NextResponse.json({ error: error.message }, { status: 500 });
   if (normalized.taxItems.length) {
-    const taxInsert = await admin.from("expense_tax_items").insert(taxPayload(String(data.id), normalized.taxItems)).select("*");
+    const taxInsert = await admin.from("expense_tax_items").insert(taxPayload(auth.companyId, String(data.id), normalized.taxItems)).select("*");
     if (taxInsert.error) {
-      await admin.from("expenses").delete().eq("id", data.id);
+      await admin.from("expenses").delete().eq("company_id", auth.companyId).eq("id", data.id);
       return NextResponse.json({ error: taxInsert.error.message }, { status: 500 });
     }
     data.expense_tax_items = taxInsert.data;
@@ -306,41 +306,41 @@ export async function PATCH(request: Request) {
   if ("error" in normalized) return NextResponse.json({ error: normalized.error }, { status: 400 });
 
   const admin = getSupabaseAdminClient();
-  const guarantee = await linkedGuarantee(admin, id);
+  const guarantee = await linkedGuarantee(admin, auth.companyId, id);
   if (guarantee.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (guarantee.id) return NextResponse.json({ error: managedExpenseMessage, guaranteeId: guarantee.id }, { status: 409 });
-  const manualSaleCost = await linkedManualSaleCost(admin, id);
+  const manualSaleCost = await linkedManualSaleCost(admin, auth.companyId, id);
   if (manualSaleCost.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (manualSaleCost.id) {
     return NextResponse.json({ error: managedManualSaleCostMessage, manualSaleCostObligationId: manualSaleCost.id }, { status: 409 });
   }
-  const participation = await linkedParticipation(admin, id);
+  const participation = await linkedParticipation(admin, auth.companyId, id);
   if (participation.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (participation.id) return NextResponse.json({ error: managedParticipationMessage, participationId: participation.id }, { status: 409 });
-  const currentExpense = await admin.from("expenses").select("category").eq("id", id).maybeSingle();
+  const currentExpense = await admin.from("expenses").select("category").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
   if (currentExpense.error) return NextResponse.json({ error: currentExpense.error.message }, { status: 500 });
   if (String(currentExpense.data?.category || "") !== normalized.expense.category) {
-    const category = await categoryAvailable(admin, normalized.expense.category);
+    const category = await categoryAvailable(admin, auth.companyId, normalized.expense.category);
     if (category.error) return NextResponse.json({ error: category.error.message }, { status: 500 });
     if (!category.available) return NextResponse.json({ error: "Selecione uma categoria ativa." }, { status: 400 });
   }
-  const campaign = await validateCampaign(admin, normalized.expense.category, body.campaignId);
+  const campaign = await validateCampaign(admin, auth.companyId, normalized.expense.category, body.campaignId);
   if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
-  const taxCheck = await admin.from("expense_tax_items").select("id").eq("expense_id", id).limit(1);
+  const taxCheck = await admin.from("expense_tax_items").select("id").eq("company_id", auth.companyId).eq("expense_id", id).limit(1);
   const taxTableAvailable = !taxCheck.error;
   if (taxCheck.error && !isMissingTaxTable(taxCheck.error)) return NextResponse.json({ error: taxCheck.error.message }, { status: 500 });
   if (!taxTableAvailable && normalized.taxItems.length) return taxesUnavailableResponse();
 
   const updatePayload = { ...normalized.expense, ...(body.campaignId !== undefined ? { campaign_id: campaign.campaignId } : {}) };
-  const { data, error } = await admin.from("expenses").update(updatePayload).eq("id", id).select("*").maybeSingle();
+  const { data, error } = await admin.from("expenses").update(updatePayload).eq("company_id", auth.companyId).eq("id", id).select("*").maybeSingle();
   if (error) return isMissingExpensesTable(error) ? expensesUnavailableResponse() : NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Despesa não encontrada." }, { status: 404 });
 
   if (taxTableAvailable) {
-    const removed = await admin.from("expense_tax_items").delete().eq("expense_id", id);
+    const removed = await admin.from("expense_tax_items").delete().eq("company_id", auth.companyId).eq("expense_id", id);
     if (removed.error) return NextResponse.json({ error: removed.error.message }, { status: 500 });
     if (normalized.taxItems.length) {
-      const inserted = await admin.from("expense_tax_items").insert(taxPayload(id, normalized.taxItems)).select("*");
+      const inserted = await admin.from("expense_tax_items").insert(taxPayload(auth.companyId, id, normalized.taxItems)).select("*");
       if (inserted.error) return NextResponse.json({ error: inserted.error.message }, { status: 500 });
       data.expense_tax_items = inserted.data;
     }
@@ -355,18 +355,18 @@ export async function DELETE(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Informe o id da despesa." }, { status: 400 });
   const admin = getSupabaseAdminClient();
-  const guarantee = await linkedGuarantee(admin, id);
+  const guarantee = await linkedGuarantee(admin, auth.companyId, id);
   if (guarantee.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (guarantee.id) return NextResponse.json({ error: managedExpenseMessage, guaranteeId: guarantee.id }, { status: 409 });
-  const manualSaleCost = await linkedManualSaleCost(admin, id);
+  const manualSaleCost = await linkedManualSaleCost(admin, auth.companyId, id);
   if (manualSaleCost.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (manualSaleCost.id) {
     return NextResponse.json({ error: managedManualSaleCostMessage, manualSaleCostObligationId: manualSaleCost.id }, { status: 409 });
   }
-  const participation = await linkedParticipation(admin, id);
+  const participation = await linkedParticipation(admin, auth.companyId, id);
   if (participation.error) return NextResponse.json({ error: "Não foi possível validar a origem da despesa." }, { status: 500 });
   if (participation.id) return NextResponse.json({ error: managedParticipationMessage, participationId: participation.id }, { status: 409 });
-  const { data, error } = await admin.from("expenses").delete().eq("id", id).select("id");
+  const { data, error } = await admin.from("expenses").delete().eq("company_id", auth.companyId).eq("id", id).select("id");
   if (error) return isMissingExpensesTable(error) ? expensesUnavailableResponse() : NextResponse.json({ error: error.message }, { status: 500 });
   if (!data?.length) return NextResponse.json({ error: "Despesa não encontrada." }, { status: 404 });
   return NextResponse.json({ ok: true, deletedId: id });

@@ -29,6 +29,7 @@ function isMissingFinancialStructure(error: { code?: string; message?: string } 
 
 async function fetchPaidSales(
   admin: ReturnType<typeof getSupabaseAdminClient>,
+  companyId: string,
   start: string,
   end: string
 ) {
@@ -37,6 +38,7 @@ async function fetchPaidSales(
     const { data, error } = await admin
       .from("sales")
       .select("id,payment_status,payment_date,operation_commission_amount,order_status,deleted_at")
+      .eq("company_id", companyId)
       .eq("payment_status", "paid")
       .is("deleted_at", null)
       .gte("payment_date", start)
@@ -51,12 +53,13 @@ async function fetchPaidSales(
   }
 }
 
-async function fetchPaidSalesWithoutDate(admin: ReturnType<typeof getSupabaseAdminClient>) {
+async function fetchPaidSalesWithoutDate(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string) {
   const rows: Record<string, unknown>[] = [];
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await admin
       .from("sales")
       .select("id,payment_status,payment_date,operation_commission_amount,order_status,deleted_at")
+      .eq("company_id", companyId)
       .eq("payment_status", "paid")
       .is("deleted_at", null)
       .is("payment_date", null)
@@ -71,6 +74,7 @@ async function fetchPaidSalesWithoutDate(admin: ReturnType<typeof getSupabaseAdm
 
 async function fetchExpenses(
   admin: ReturnType<typeof getSupabaseAdminClient>,
+  companyId: string,
   start: string,
   end: string
 ) {
@@ -79,6 +83,7 @@ async function fetchExpenses(
     const { data, error } = await admin
       .from("expenses")
       .select("id,description,amount,expense_date,expense_tax_items(id,amount)")
+      .eq("company_id", companyId)
       .gte("expense_date", start)
       .lte("expense_date", end)
       .order("expense_date", { ascending: true })
@@ -135,9 +140,9 @@ export async function GET(request: Request) {
   const previous = previousPeriodFor(requested);
   const admin = getSupabaseAdminClient();
   const [salesResult, undatedSalesResult, expensesResult] = await Promise.all([
-    fetchPaidSales(admin, previous.start, requested.end),
-    fetchPaidSalesWithoutDate(admin),
-    fetchExpenses(admin, previous.start, requested.end)
+    fetchPaidSales(admin, auth.companyId, previous.start, requested.end),
+    fetchPaidSalesWithoutDate(admin, auth.companyId),
+    fetchExpenses(admin, auth.companyId, previous.start, requested.end)
   ]);
   const error = salesResult.error || undatedSalesResult.error || expensesResult.error;
   if (error) {

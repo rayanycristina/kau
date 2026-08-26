@@ -32,6 +32,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const admin = getSupabaseAdminClient();
   const result = await admin.from("product_kits").insert({
+    company_id: auth.companyId,
     product_id: productId,
     name,
     quantity,
@@ -76,7 +77,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!Object.keys(updates).length) return NextResponse.json({ error: "Nenhuma alteração válida foi informada." }, { status: 400 });
 
   const result = await getSupabaseAdminClient().from("product_kits").update(updates)
-    .eq("id", kitId).eq("product_id", productId).select(productKitSelect).maybeSingle();
+    .eq("company_id", auth.companyId).eq("id", kitId).eq("product_id", productId).select(productKitSelect).maybeSingle();
   if (result.error) {
     if (isProductSetupError(result.error)) return productSetupResponse();
     if (result.error.code === "23505") return NextResponse.json({ error: "Já existe um kit com esse nome para o produto." }, { status: 409 });

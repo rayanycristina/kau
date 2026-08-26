@@ -13,8 +13,8 @@ function uuid(value: unknown) { const result = text(value); return result && /^[
 function missing(error: { code?: string; message?: string } | null) { return error?.code === "42P01" || /ad_accounts|campaigns|schema cache/i.test(String(error?.message || "")); }
 const validAccountStatuses = ["active", "inactive"] as const;
 
-async function findAccount(admin: ReturnType<typeof getSupabaseAdminClient>, id: string) {
-  return admin.from("ad_accounts").select("id,name,platform,status").eq("id", id).maybeSingle();
+async function findAccount(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, id: string) {
+  return admin.from("ad_accounts").select("id,name,platform,status").eq("company_id", companyId).eq("id", id).maybeSingle();
 }
 
 function mapAccount(row: Record<string, unknown>): AdAccount {
@@ -33,8 +33,8 @@ export async function GET(request: Request) {
   const admin = getSupabaseAdminClient();
   const status = new URL(request.url).searchParams.get("status");
   const [accountsResult, campaignsResult] = await Promise.all([
-    admin.from("ad_accounts").select("*").order("name"),
-    (() => { let query = admin.from("campaigns").select("*,ad_accounts(name)").order("created_at", { ascending: false }); if (status === "active") query = query.eq("status", "active"); return query; })()
+    admin.from("ad_accounts").select("*").eq("company_id", auth.companyId).order("name"),
+    (() => { let query = admin.from("campaigns").select("*,ad_accounts(name)").eq("company_id", auth.companyId).order("created_at", { ascending: false }); if (status === "active") query = query.eq("status", "active"); return query; })()
   ]);
   const error = accountsResult.error || campaignsResult.error;
   if (error && missing(error)) return NextResponse.json({ accounts: [], campaigns: [], setupRequired: true });
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
   if (kind === "account") {
     const platform = platforms.includes(body.platform) ? body.platform as AdPlatform : null;
     if (!platform) return NextResponse.json({ error: "Selecione uma plataforma de anúncio válida." }, { status: 400 });
-    const result = await admin.from("ad_accounts").insert({ name, platform, external_account_id: text(body.externalAccountId), status: "active", created_by: auth.user.id }).select("*").single();
+    const result = await admin.from("ad_accounts").insert({ company_id: auth.companyId, name, platform, external_account_id: text(body.externalAccountId), status: "active", created_by: auth.user.id }).select("*").single();
     if (result.error && missing(result.error)) return NextResponse.json({ error: "A migration 031 precisa ser aplicada para ativar Campanhas.", setupRequired: true }, { status: 409 });
     if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma conta com esse nome e plataforma." }, { status: 409 });
     if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
@@ -69,13 +69,13 @@ export async function POST(request: Request) {
   if (endDate && startDate && endDate < startDate) return NextResponse.json({ error: "A data final não pode ser anterior à data inicial." }, { status: 400 });
   if (body.adAccountId && !adAccountId) return NextResponse.json({ error: "Selecione uma conta de anúncio válida." }, { status: 400 });
   if (adAccountId) {
-    const accountResult = await findAccount(admin, adAccountId);
+    const accountResult = await findAccount(admin, auth.companyId, adAccountId);
     if (accountResult.error) return NextResponse.json({ error: accountResult.error.message }, { status: 500 });
     if (!accountResult.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     if (accountResult.data.status !== "active") return NextResponse.json({ error: "Selecione uma conta de anúncio ativa." }, { status: 409 });
     if (accountResult.data.platform !== adPlatform) return NextResponse.json({ error: "A plataforma da campanha deve ser a mesma da conta de anúncio." }, { status: 409 });
   }
-  const result = await admin.from("campaigns").insert({ name, ad_account_id: adAccountId, ad_platform: adPlatform, product_name: text(body.productName), status, external_campaign_id: text(body.externalCampaignId), start_date: startDate, end_date: endDate, notes: text(body.notes), created_by: auth.user.id }).select("*,ad_accounts(name)").single();
+  const result = await admin.from("campaigns").insert({ company_id: auth.companyId, name, ad_account_id: adAccountId, ad_platform: adPlatform, product_name: text(body.productName), status, external_campaign_id: text(body.externalCampaignId), start_date: startDate, end_date: endDate, notes: text(body.notes), created_by: auth.user.id }).select("*,ad_accounts(name)").single();
   if (result.error && missing(result.error)) return NextResponse.json({ error: "A migration 031 precisa ser aplicada para ativar Campanhas.", setupRequired: true }, { status: 409 });
   if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma campanha com esse nome nesta conta." }, { status: 409 });
   if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
@@ -91,7 +91,7 @@ export async function PATCH(request: Request) {
   if (!id) return NextResponse.json({ error: "Informe um registro válido." }, { status: 400 });
   const admin = getSupabaseAdminClient();
   if (body.kind === "account") {
-    const currentResult = await findAccount(admin, id);
+    const currentResult = await findAccount(admin, auth.companyId, id);
     if (currentResult.error) return NextResponse.json({ error: currentResult.error.message }, { status: 500 });
     if (!currentResult.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     const name = body.name === undefined ? String(currentResult.data.name) : text(body.name);
@@ -101,19 +101,19 @@ export async function PATCH(request: Request) {
     if (!platform) return NextResponse.json({ error: "Selecione uma plataforma de anúncio válida." }, { status: 400 });
     if (!status) return NextResponse.json({ error: "Selecione um status válido para a conta." }, { status: 400 });
     if (platform !== currentResult.data.platform) {
-      const linked = await admin.from("campaigns").select("id").eq("ad_account_id", id).limit(1);
+      const linked = await admin.from("campaigns").select("id").eq("company_id", auth.companyId).eq("ad_account_id", id).limit(1);
       if (linked.error) return NextResponse.json({ error: linked.error.message }, { status: 500 });
       if ((linked.data || []).length) return NextResponse.json({ error: "A plataforma não pode ser alterada enquanto a conta possuir campanhas vinculadas." }, { status: 409 });
     }
     const updates = { name, platform, status, ...(body.externalAccountId !== undefined ? { external_account_id: text(body.externalAccountId) } : {}) };
-    const result = await admin.from("ad_accounts").update(updates).eq("id", id).select("*").maybeSingle();
+    const result = await admin.from("ad_accounts").update(updates).eq("company_id", auth.companyId).eq("id", id).select("*").maybeSingle();
     if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma conta com esse nome e plataforma." }, { status: 409 });
     if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
     if (!result.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     return NextResponse.json({ account: mapAccount(result.data) });
   }
 
-  const currentResult = await admin.from("campaigns").select("id,name,ad_account_id,ad_platform,product_name,status,external_campaign_id,start_date,end_date,notes").eq("id", id).maybeSingle();
+  const currentResult = await admin.from("campaigns").select("id,name,ad_account_id,ad_platform,product_name,status,external_campaign_id,start_date,end_date,notes").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
   if (currentResult.error) return NextResponse.json({ error: currentResult.error.message }, { status: 500 });
   if (!currentResult.data) return NextResponse.json({ error: "Campanha não encontrada." }, { status: 404 });
   const name = body.name === undefined ? String(currentResult.data.name) : text(body.name);
@@ -134,7 +134,7 @@ export async function PATCH(request: Request) {
   let adPlatform = body.adPlatform === undefined ? currentResult.data.ad_platform as AdPlatform : platforms.includes(body.adPlatform) ? body.adPlatform as AdPlatform : null;
   if (!adPlatform) return NextResponse.json({ error: "Selecione uma plataforma de anúncio válida." }, { status: 400 });
   if (adAccountId) {
-    const accountResult = await findAccount(admin, adAccountId);
+    const accountResult = await findAccount(admin, auth.companyId, adAccountId);
     if (accountResult.error) return NextResponse.json({ error: accountResult.error.message }, { status: 500 });
     if (!accountResult.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     const isCurrentHistoricalAccount = currentResult.data.ad_account_id === adAccountId;
@@ -154,7 +154,7 @@ export async function PATCH(request: Request) {
     end_date: endDate,
     notes: body.notes === undefined ? currentResult.data.notes : text(body.notes)
   };
-  const result = await admin.from("campaigns").update(updates).eq("id", id).select("*,ad_accounts(name)").maybeSingle();
+  const result = await admin.from("campaigns").update(updates).eq("company_id", auth.companyId).eq("id", id).select("*,ad_accounts(name)").maybeSingle();
   if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma campanha com esse nome nesta conta." }, { status: 409 });
   if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
   if (!result.data) return NextResponse.json({ error: "Campanha não encontrada." }, { status: 404 });

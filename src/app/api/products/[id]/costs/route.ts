@@ -47,13 +47,13 @@ export async function POST(request: Request, context: RouteContext) {
   const rpcValue = result.data as Record<string, unknown> | null;
   const costId = typeof rpcValue?.cost_id === "string" ? rpcValue.cost_id : null;
   if (!costId) return NextResponse.json({ error: "O custo foi criado, mas não foi possível confirmar seu identificador." }, { status: 500 });
-  const costResult = await admin.from("product_cost_history").select(productCostSelect).eq("id", costId).maybeSingle();
+  const costResult = await admin.from("product_cost_history").select(productCostSelect).eq("company_id", auth.companyId).eq("id", costId).maybeSingle();
   if (costResult.error) {
     if (isProductSetupError(costResult.error)) return productSetupResponse();
     return NextResponse.json({ error: costResult.error.message }, { status: 500 });
   }
   if (!costResult.data) return NextResponse.json({ error: "Custo criado não encontrado." }, { status: 500 });
-  const detail = await loadProductDetail(admin, productId);
+  const detail = await loadProductDetail(admin, productId, auth.companyId);
   if ("error" in detail) {
     if (isProductSetupError(detail.error)) return productSetupResponse();
     return NextResponse.json({ error: detail.error.message }, { status: 500 });

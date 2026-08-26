@@ -30,8 +30,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
   const admin = getSupabaseAdminClient();
+  const membershipResult = await admin.from("company_memberships").select("role,is_active").eq("company_id", auth.companyId).eq("user_id", id).maybeSingle();
+  if (membershipResult.error || !membershipResult.data) return NextResponse.json({ error: "Usuário não encontrado nesta empresa." }, { status: 404 });
+  if (membershipResult.data.role === "owner" && (body.role !== undefined || body.isActive === false)) {
+    return NextResponse.json({ error: "O proprietário da empresa não pode ser removido ou desativado." }, { status: 409 });
+  }
 
   const profilePatch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  const membershipPatch: Record<string, unknown> = {};
 
   if (body.fullName !== undefined) {
     const fullName = cleanText(body.fullName);
@@ -49,6 +55,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const role = normalizeRole(body.role);
     if (!role) return NextResponse.json({ error: "Role inválida." }, { status: 400 });
     profilePatch.role = role;
+    membershipPatch.role = role;
   }
 
   if (body.commissionPercent !== undefined) {
@@ -59,6 +66,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   if (body.isActive !== undefined) {
     profilePatch.is_active = Boolean(body.isActive);
+    membershipPatch.is_active = Boolean(body.isActive);
   }
 
   if (body.email !== undefined) {
@@ -88,9 +96,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  if (Object.keys(membershipPatch).length) {
+    const membershipUpdate = await admin.from("company_memberships").update(membershipPatch).eq("company_id", auth.companyId).eq("user_id", id);
+    if (membershipUpdate.error) return NextResponse.json({ error: "O perfil foi atualizado, mas o acesso empresarial não pôde ser sincronizado." }, { status: 500 });
+  }
+
   if (profilePatch.is_active === false) {
     await admin.auth.admin.signOut(id, "global");
   }
 
-  return NextResponse.json({ user: mapUserProfile(data) });
+  const mapped = mapUserProfile(data);
+  mapped.company = auth.company;
+  mapped.companyRole = body.role ?? membershipResult.data.role;
+  return NextResponse.json({ user: mapped });
 }

@@ -18,9 +18,9 @@ function toMoney(value: unknown) {
   return Math.round(number * 100) / 100;
 }
 
-async function assertLeadAccess(id: string, profile: UserProfile) {
+async function assertLeadAccess(id: string, companyId: string, profile: UserProfile) {
   const supabase = getSupabaseServerClient();
-  const { data } = await supabase.from("leads").select("seller_name").eq("id", id).maybeSingle();
+  const { data } = await supabase.from("leads").select("seller_name").eq("company_id", companyId).eq("id", id).maybeSingle();
   if (!data) return false;
   if (isAdmin(profile)) return true;
   return sellerNameMatches(profile, data.seller_name);
@@ -57,12 +57,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!hasSupabaseConfig()) return NextResponse.json({ error: "Supabase nao configurado." }, { status: 503 });
   const { id } = await params;
 
-  if (!(await assertLeadAccess(id, auth.profile))) {
+  if (!(await assertLeadAccess(id, auth.companyId, auth.profile))) {
     return forbiddenResponse("Você não pode acessar este lead.");
   }
 
   const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.from("leads").select("*").eq("id", id).single();
+  const { data, error } = await supabase.from("leads").select("*").eq("company_id", auth.companyId).eq("id", id).single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ lead: mapLead(data) });
 }
@@ -74,7 +74,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!hasSupabaseConfig()) return NextResponse.json({ error: "Supabase nao configurado." }, { status: 503 });
   const { id } = await params;
 
-  if (!(await assertLeadAccess(id, auth.profile))) {
+  if (!(await assertLeadAccess(id, auth.companyId, auth.profile))) {
     return forbiddenResponse("Você não pode editar este lead.");
   }
 
@@ -85,7 +85,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (patch.customer_phone === null) return NextResponse.json({ error: "Telefone do lead nao pode ficar vazio." }, { status: 400 });
 
   const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.from("leads").update(patch).eq("id", id).select("*").single();
+  const { data, error } = await supabase.from("leads").update(patch).eq("company_id", auth.companyId).eq("id", id).select("*").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ lead: mapLead(data) });
 }
@@ -97,7 +97,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   if (!hasSupabaseConfig()) return NextResponse.json({ error: "Supabase nao configurado." }, { status: 503 });
   const { id } = await params;
 
-  if (!(await assertLeadAccess(id, auth.profile))) {
+  if (!(await assertLeadAccess(id, auth.companyId, auth.profile))) {
     return forbiddenResponse("Você não pode excluir este lead.");
   }
 
@@ -108,6 +108,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const { data, error } = await supabase
     .from("leads")
     .delete()
+    .eq("company_id", auth.companyId)
     .eq("id", id)
     .select("id");
 

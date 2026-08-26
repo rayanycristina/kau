@@ -50,7 +50,7 @@ export async function GET(request: Request) {
 
   const admin = getSupabaseAdminClient();
   const activeOnly = new URL(request.url).searchParams.get("active") === "true" || !isAdmin(auth.profile);
-  let query = admin.from("sellers").select("*").order("is_owner", { ascending: false }).order("full_name");
+  let query = admin.from("sellers").select("*").eq("company_id", auth.companyId).order("is_owner", { ascending: false }).order("full_name");
   if (activeOnly) query = query.eq("status", "active");
   const { data, error } = await query;
   if (error) {
@@ -60,9 +60,9 @@ export async function GET(request: Request) {
 
   const metrics = new Map<string, { count: number; total: number }>();
   if (isAdmin(auth.profile)) {
-    let salesResult = await admin.from("sales").select("seller_id,total_amount").is("deleted_at", null).not("seller_id", "is", null);
+    let salesResult = await admin.from("sales").select("seller_id,total_amount").eq("company_id", auth.companyId).is("deleted_at", null).not("seller_id", "is", null);
     if (salesResult.error && softDeleteSchemaMissing(salesResult.error)) {
-      salesResult = await admin.from("sales").select("seller_id,total_amount").not("seller_id", "is", null);
+      salesResult = await admin.from("sales").select("seller_id,total_amount").eq("company_id", auth.companyId).not("seller_id", "is", null);
     }
     const sales = salesResult.data;
     for (const sale of sales ?? []) {
@@ -89,7 +89,14 @@ export async function POST(request: Request) {
   if (percent === null) return NextResponse.json({ error: "A comissão deve ser um percentual entre 0 e 100." }, { status: 400 });
 
   const admin = getSupabaseAdminClient();
+  const userId = cleanText(body.userId);
+  if (userId) {
+    const membership = await admin.from("company_memberships").select("user_id").eq("company_id", auth.companyId).eq("user_id", userId).eq("is_active", true).maybeSingle();
+    if (!membership.data) return NextResponse.json({ error: "O usuário não pertence a esta empresa." }, { status: 409 });
+  }
   const { data, error } = await admin.from("sellers").insert({
+    company_id: auth.companyId,
+    user_id: userId,
     full_name: fullName,
     display_name: cleanText(body.displayName),
     username: cleanText(body.username),
@@ -117,10 +124,10 @@ export async function PATCH(request: Request) {
   const id = cleanText(body.id);
   if (!id) return NextResponse.json({ error: "Vendedor inválido." }, { status: 400 });
   const admin = getSupabaseAdminClient();
-  const { data: current, error: currentError } = await admin.from("sellers").select("*").eq("id", id).maybeSingle();
+  const { data: current, error: currentError } = await admin.from("sellers").select("*").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
   if (currentError || !current) return NextResponse.json({ error: "Vendedor não encontrado." }, { status: 404 });
   if (current.is_owner && body.active === false) return NextResponse.json({ error: "A dona da operação não pode ser desativada." }, { status: 409 });
-  if (current.is_owner && body.fullName !== undefined && cleanText(body.fullName) !== "Rayany Cristina Feitosa da Silva") return NextResponse.json({ error: "A identificação da dona da operação não pode ser alterada por este cadastro." }, { status: 409 });
+  if (current.is_owner && body.fullName !== undefined && cleanText(body.fullName) !== current.full_name) return NextResponse.json({ error: "A identificação do proprietário da operação não pode ser alterada por este cadastro." }, { status: 409 });
 
   const patch: Record<string, unknown> = {};
   if (body.fullName !== undefined) {
@@ -139,7 +146,7 @@ export async function PATCH(request: Request) {
   }
   if (body.active !== undefined) patch.status = body.active ? "active" : "inactive";
 
-  const { data, error } = await admin.from("sellers").update(patch).eq("id", id).select("*").single();
+  const { data, error } = await admin.from("sellers").update(patch).eq("company_id", auth.companyId).eq("id", id).select("*").single();
   if (error || !data) {
     if (error?.code === "23505") return NextResponse.json({ error: "Já existe um vendedor com esse nome, login ou e-mail." }, { status: 409 });
     return NextResponse.json({ error: error?.message || "Não foi possível atualizar o vendedor." }, { status: 500 });

@@ -7,6 +7,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if ("error" in auth) return auth.error;
 
   const { id } = await context.params;
+  const guarantee = await getSupabaseAdminClient().from("postpaid_guarantees").select("id").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
+  if (!guarantee.data) return NextResponse.json({ error: "Garantia não encontrada." }, { status: 404 });
   const body = await request.json().catch(() => ({}));
   const paidAt = String(body.paidAt || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt)) {

@@ -205,6 +205,7 @@ async function resolveManualSaleFields(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   body: Partial<SaleInput>,
   actorId: string,
+  companyId: string,
   current?: Record<string, unknown>
 ) {
   const platform = body.salePlatform !== undefined ? cleanPlatform(body.salePlatform) : cleanPlatform(current?.sale_platform);
@@ -252,7 +253,7 @@ async function resolveManualSaleFields(
     } as const;
   }
 
-  const product = await supabase.from("products").select("id,name,status,available_for_new_sales").eq("id", productId).maybeSingle();
+  const product = await supabase.from("products").select("id,name,status,available_for_new_sales").eq("company_id", companyId).eq("id", productId).maybeSingle();
   if (product.error) return { error: isProductDomainSchemaError(product.error) ? "A migration 034 precisa ser aplicada para usar custos da Venda Manual." : product.error.message, setupRequired: isProductDomainSchemaError(product.error) } as const;
   if (!product.data) return { error: "Produto não encontrado." } as const;
   const productChanged = currentPlatform !== "manual" || currentProductId !== productId;
@@ -261,7 +262,7 @@ async function resolveManualSaleFields(
   const kitId = cleanUuid(body.productKitId !== undefined ? body.productKitId : current?.product_kit_id);
   let quantity = toOptionalPositiveInteger(body.productQuantity !== undefined ? body.productQuantity : current?.product_quantity);
   if (kitId) {
-    const kit = await supabase.from("product_kits").select("id,product_id,quantity,is_active").eq("id", kitId).maybeSingle();
+    const kit = await supabase.from("product_kits").select("id,product_id,quantity,is_active").eq("company_id", companyId).eq("id", kitId).maybeSingle();
     if (kit.error) return { error: isProductDomainSchemaError(kit.error) ? "A migration 034 precisa ser aplicada para usar kits." : kit.error.message, setupRequired: isProductDomainSchemaError(kit.error) } as const;
     if (!kit.data || String(kit.data.product_id) !== productId) return { error: "O kit selecionado não pertence a este produto." } as const;
     const kitChanged = currentPlatform !== "manual" || currentKitId !== kitId || productChanged;
@@ -277,7 +278,7 @@ async function resolveManualSaleFields(
     || currentQuantity !== quantity
     || currentSaleDate !== saleDate;
   if (snapshotChanged) {
-    const cost = await supabase.from("product_cost_history").select("unit_cost,effective_from").eq("product_id", productId).lte("effective_from", saleDate).order("effective_from", { ascending: false }).limit(1).maybeSingle();
+    const cost = await supabase.from("product_cost_history").select("unit_cost,effective_from").eq("company_id", companyId).eq("product_id", productId).lte("effective_from", saleDate).order("effective_from", { ascending: false }).limit(1).maybeSingle();
     if (cost.error) return { error: isProductDomainSchemaError(cost.error) ? "A migration 034 precisa ser aplicada para consultar custos do produto." : cost.error.message, setupRequired: isProductDomainSchemaError(cost.error) } as const;
     if (!cost.data) return { error: "Este produto não possui custo configurado para a data da venda." } as const;
   }
@@ -293,18 +294,18 @@ async function resolveManualSaleFields(
   } as const;
 }
 
-async function validateCampaign(supabase: ReturnType<typeof getSupabaseServerClient>, value: unknown) {
+async function validateCampaign(supabase: ReturnType<typeof getSupabaseServerClient>, companyId: string, value: unknown) {
   if (value === undefined || value === null || value === "") return { campaignId: null } as const;
   const campaignId = cleanUuid(value);
   if (!campaignId) return { error: "Selecione uma campanha válida." } as const;
-  const result = await supabase.from("campaigns").select("id,status").eq("id", campaignId).maybeSingle();
+  const result = await supabase.from("campaigns").select("id,status").eq("company_id", companyId).eq("id", campaignId).maybeSingle();
   if (result.error) return { error: isCampaignSchemaError(result.error) ? "A migration 031 precisa ser aplicada antes de vincular campanhas." : result.error.message } as const;
   if (!result.data || result.data.status === "archived") return { error: "A campanha selecionada não está disponível." } as const;
   return { campaignId } as const;
 }
 
-async function resolveOperationalSeller(supabase: ReturnType<typeof getSupabaseServerClient>, profile: UserProfile, sellerId?: string | null) {
-  let query = supabase.from("sellers").select("id,user_id,full_name,display_name,commission_percent,status,is_owner");
+async function resolveOperationalSeller(supabase: ReturnType<typeof getSupabaseServerClient>, companyId: string, profile: UserProfile, sellerId?: string | null) {
+  let query = supabase.from("sellers").select("id,user_id,full_name,display_name,commission_percent,status,is_owner").eq("company_id", companyId);
   query = isAdmin(profile) ? query.eq("id", sellerId || "") : query.eq("user_id", profile.id);
   const { data, error } = await query.maybeSingle();
   if (error) return { error: isSellerManagementSchemaError(error) ? "A migration 026 precisa ser aplicada para usar o cadastro de vendedores." : error.message } as const;
@@ -426,11 +427,11 @@ function mapSale(row: Record<string, unknown>, exposeCosts = true) {
   };
 }
 
-async function assertSaleAccess(id: string, profile: UserProfile) {
+async function assertSaleAccess(id: string, companyId: string, profile: UserProfile) {
   const supabase = getSupabaseServerClient();
-  let result = await supabase.from("sales").select("seller_name,deleted_at").eq("id", id).maybeSingle();
+  let result = await supabase.from("sales").select("seller_name,deleted_at").eq("company_id", companyId).eq("id", id).maybeSingle();
   if (result.error && isSalesSoftDeleteSchemaError(result.error)) {
-    result = await supabase.from("sales").select("seller_name").eq("id", id).maybeSingle();
+    result = await supabase.from("sales").select("seller_name").eq("company_id", companyId).eq("id", id).maybeSingle();
   }
   const { data } = result;
   if (!data) return false;
@@ -449,7 +450,7 @@ export async function GET(request: Request) {
 
   const supabase = getSupabaseServerClient();
   const includeDeletedFinancialHistory = new URL(request.url).searchParams.get("includeDeleted") === "financial";
-  let query = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+  let query = supabase.from("sales").select("*").eq("company_id", auth.companyId).order("created_at", { ascending: false }).limit(500);
   if (!includeDeletedFinancialHistory) query = query.is("deleted_at", null);
   if (isSeller(auth.profile)) {
     query = query.eq("seller_name", auth.profile.sellerDisplayName);
@@ -457,7 +458,7 @@ export async function GET(request: Request) {
   let { data, error } = await query;
 
   if (error && !includeDeletedFinancialHistory && isSalesSoftDeleteSchemaError(error)) {
-    let fallback = supabase.from("sales").select("*").order("created_at", { ascending: false }).limit(500);
+    let fallback = supabase.from("sales").select("*").eq("company_id", auth.companyId).order("created_at", { ascending: false }).limit(500);
     if (isSeller(auth.profile)) fallback = fallback.eq("seller_name", auth.profile.sellerDisplayName);
     const fallbackResult = await fallback;
     data = fallbackResult.data;
@@ -484,9 +485,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Selecione uma plataforma de venda válida." }, { status: 400 });
   }
   const supabase = getSupabaseServerClient();
-  const campaign = await validateCampaign(supabase, body.campaignId);
+  const campaign = await validateCampaign(supabase, auth.companyId, body.campaignId);
   if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
-  const resolvedSeller = await resolveOperationalSeller(supabase, auth.profile, body.sellerId);
+  const resolvedSeller = await resolveOperationalSeller(supabase, auth.companyId, auth.profile, body.sellerId);
   if ("error" in resolvedSeller) return NextResponse.json({ error: resolvedSeller.error }, { status: 409 });
   const seller = resolvedSeller.seller;
   const normalized = normalizeSale({
@@ -502,14 +503,14 @@ export async function POST(request: Request) {
 
   let manualFields: Record<string, unknown> = {};
   if (normalized.sale.sale_platform === "manual") {
-    const manual = await resolveManualSaleFields(supabase, body, auth.user.id);
+    const manual = await resolveManualSaleFields(supabase, body, auth.user.id, auth.companyId);
     if ("error" in manual) {
       const setupRequired = "setupRequired" in manual && Boolean(manual.setupRequired);
       return NextResponse.json({ error: manual.error, setupRequired }, { status: setupRequired ? 409 : 400 });
     }
     manualFields = manual.fields;
   }
-  const insertPayload: Record<string, unknown> = { ...normalized.sale, ...manualFields };
+  const insertPayload: Record<string, unknown> = { ...normalized.sale, ...manualFields, company_id: auth.companyId };
   if (campaign.campaignId) insertPayload.campaign_id = campaign.campaignId;
   let { data, error } = await supabase
     .from("sales")
@@ -549,6 +550,7 @@ export async function POST(request: Request) {
   // Se a tabela leads ainda não existir ou a policy não estiver aplicada,
   // a venda continua salva normalmente e o erro do lead é ignorado.
   await supabase.from("leads").insert({
+    company_id: auth.companyId,
     customer_name: normalized.sale.customer_name,
     customer_phone: normalized.sale.customer_phone || "Sem telefone",
     city: normalized.sale.city,
@@ -581,7 +583,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Informe o id da venda para atualizar." }, { status: 400 });
   }
 
-  if (!(await assertSaleAccess(id, auth.profile))) {
+  if (!(await assertSaleAccess(id, auth.companyId, auth.profile))) {
     return forbiddenResponse("Você não pode editar esta venda.");
   }
 
@@ -590,7 +592,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Selecione uma plataforma de venda válida." }, { status: 400 });
   }
   const supabase = getSupabaseServerClient();
-  const currentDelivery = await supabase.from("sales").select("received_date,delivery_status,seller_id,sale_platform,created_at").eq("id", id).maybeSingle();
+  const currentDelivery = await supabase.from("sales").select("received_date,delivery_status,seller_id,sale_platform,created_at").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
   if (currentDelivery.error) return NextResponse.json({ error: "Não foi possível consultar os dados de entrega da venda." }, { status: 500 });
   if (!currentDelivery.data) return NextResponse.json({ error: "Venda não encontrada." }, { status: 404 });
   const updates: Record<string, unknown> = {};
@@ -646,7 +648,7 @@ export async function PATCH(request: Request) {
     updates.seller_name = sellerName;
   }
   if (body.sellerId !== undefined && String(body.sellerId || "") !== String(currentDelivery.data.seller_id || "")) {
-    const resolvedSeller = await resolveOperationalSeller(supabase, auth.profile, cleanText(body.sellerId));
+    const resolvedSeller = await resolveOperationalSeller(supabase, auth.companyId, auth.profile, cleanText(body.sellerId));
     if ("error" in resolvedSeller) return NextResponse.json({ error: resolvedSeller.error }, { status: 409 });
     updates.seller_id = resolvedSeller.seller.id;
     updates.seller_name = resolvedSeller.seller.display_name || resolvedSeller.seller.full_name;
@@ -657,7 +659,7 @@ export async function PATCH(request: Request) {
     let currentManual: Record<string, unknown> = { ...currentDelivery.data };
     let canResolveManualFields = true;
     if (currentDelivery.data.sale_platform === "manual") {
-      const currentProduct = await supabase.from("sales").select("product_id,product_kit_id,product_quantity,unit_cost_snapshot,total_product_cost_snapshot,manual_shipping_amount,manual_costs_created_by").eq("id", id).maybeSingle();
+      const currentProduct = await supabase.from("sales").select("product_id,product_kit_id,product_quantity,unit_cost_snapshot,total_product_cost_snapshot,manual_shipping_amount,manual_costs_created_by").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
       if (currentProduct.error) {
         if (isProductDomainSchemaError(currentProduct.error)) {
           const requestsNewCostData = Boolean(
@@ -680,7 +682,7 @@ export async function PATCH(request: Request) {
       }
     }
     if (canResolveManualFields) {
-      const manual = await resolveManualSaleFields(supabase, body, auth.user.id, currentManual);
+      const manual = await resolveManualSaleFields(supabase, body, auth.user.id, auth.companyId, currentManual);
       if ("error" in manual) {
         const setupRequired = "setupRequired" in manual && Boolean(manual.setupRequired);
         return NextResponse.json({ error: manual.error, setupRequired }, { status: setupRequired ? 409 : 400 });
@@ -689,7 +691,7 @@ export async function PATCH(request: Request) {
     }
   }
   if (body.campaignId !== undefined) {
-    const campaign = await validateCampaign(supabase, body.campaignId);
+    const campaign = await validateCampaign(supabase, auth.companyId, body.campaignId);
     if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
     updates.campaign_id = campaign.campaignId;
   }
@@ -722,6 +724,7 @@ export async function PATCH(request: Request) {
   let { data, error } = await supabase
     .from("sales")
     .update(updatePayload)
+    .eq("company_id", auth.companyId)
     .eq("id", id)
     .select("*")
     .single();
@@ -740,7 +743,7 @@ export async function PATCH(request: Request) {
     } else if (isOrderSchemaError(error)) {
       const fallbackPayload = removeOrderSchemaFields(updatePayload);
       if (body.orderStatus !== undefined || body.orderTags !== undefined) {
-        const current = await supabase.from("sales").select("notes").eq("id", id).single();
+        const current = await supabase.from("sales").select("notes").eq("company_id", auth.companyId).eq("id", id).single();
         fallbackPayload.notes = notesWithOrderFallback(
           body.notes !== undefined ? body.notes : current.data?.notes,
           body.orderStatus,
@@ -750,6 +753,7 @@ export async function PATCH(request: Request) {
       const fallback = await supabase
         .from("sales")
         .update(fallbackPayload)
+        .eq("company_id", auth.companyId)
         .eq("id", id)
         .select("*")
         .single();
@@ -780,7 +784,7 @@ export async function DELETE(request: Request) {
   }
 
   const supabase = getSupabaseServerClient();
-  const saleLookup = await supabase.from("sales").select("id,seller_name,deleted_at").eq("id", id).maybeSingle();
+  const saleLookup = await supabase.from("sales").select("id,seller_name,deleted_at").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
 
   if (saleLookup.error) {
     if (isSalesSoftDeleteSchemaError(saleLookup.error)) {
@@ -804,6 +808,7 @@ export async function DELETE(request: Request) {
   const { data, error } = await supabase
     .from("sales")
     .update({ deleted_at: deletedAt, deleted_by: auth.user.id })
+    .eq("company_id", auth.companyId)
     .eq("id", id)
     .is("deleted_at", null)
     .select("id");

@@ -8,6 +8,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
   const { id } = await context.params;
+  const guarantee = await getSupabaseAdminClient().from("postpaid_guarantees").select("id").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
+  if (!guarantee.data) return NextResponse.json({ error: "Garantia não encontrada." }, { status: 404 });
   const body = await request.json().catch(() => ({}));
   const { data, error } = await getSupabaseAdminClient().rpc("register_guarantee_payment", { p_guarantee_id: id, p_paid_amount: Number(body.paidAmount), p_paid_at: body.paidAt, p_notes: body.notes || null, p_admin_id: auth.user.id });
   if (error) {

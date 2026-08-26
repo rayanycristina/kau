@@ -76,6 +76,7 @@ export async function GET(request: Request) {
   let query = admin
     .from("manual_sale_cost_obligations")
     .select("*")
+    .eq("company_id", auth.companyId)
     .order("created_at", { ascending: false });
   if (requestedStatus) query = query.eq("status", requestedStatus);
   if (saleId) query = query.eq("sale_id", saleId);
@@ -101,6 +102,7 @@ export async function GET(request: Request) {
     const sales = await admin
       .from("sales")
       .select("id,customer_name,product_name,sale_platform,created_at,deleted_at")
+      .eq("company_id", auth.companyId)
       .in("id", saleIds);
     if (sales.error) {
       return NextResponse.json({ error: "Não foi possível identificar as vendas vinculadas aos custos." }, { status: 500 });

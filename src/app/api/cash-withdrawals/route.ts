@@ -74,12 +74,13 @@ function saleIdsFromWithdrawal(row: CashWithdrawalRow) {
   return row.sale_ids.map((id) => String(id || "").trim()).filter(Boolean);
 }
 
-async function sellerSaleIdSet(profile: UserProfile) {
+async function sellerSaleIdSet(profile: UserProfile, companyId: string) {
   const supabase = getSupabaseServerClient();
 
   const result = await supabase
     .from("sales")
     .select("id")
+    .eq("company_id", companyId)
     .is("deleted_at", null)
     .eq("seller_name", profile.sellerDisplayName);
 
@@ -94,7 +95,7 @@ async function sellerSaleIdSet(profile: UserProfile) {
   return new Set((data ?? []).map((row: SaleOwnerRow) => String(row.id || "").trim()).filter(Boolean));
 }
 
-async function validateSaleIdsForProfile(profile: UserProfile, saleIds: string[]) {
+async function validateSaleIdsForProfile(profile: UserProfile, companyId: string, saleIds: string[]) {
   if (!saleIds.length) return { saleIds: [], error: null as string | null, status: 200 };
 
   const supabase = getSupabaseServerClient();
@@ -102,6 +103,7 @@ async function validateSaleIdsForProfile(profile: UserProfile, saleIds: string[]
   const result = await supabase
     .from("sales")
     .select("id,seller_name")
+    .eq("company_id", companyId)
     .is("deleted_at", null)
     .in("id", saleIds);
 
@@ -142,6 +144,7 @@ async function validateSaleIdsForProfile(profile: UserProfile, saleIds: string[]
 
 async function findAlreadyWithdrawnSaleIds(
   saleIds: string[],
+  companyId: string,
   scope: WithdrawalScope,
   sellerName?: string
 ) {
@@ -152,6 +155,7 @@ async function findAlreadyWithdrawnSaleIds(
   let query = supabase
     .from("cash_withdrawals")
     .select("sale_ids,scope,seller_name")
+    .eq("company_id", companyId)
     .eq("scope", scope);
 
   if (scope === "seller") {
@@ -202,6 +206,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("cash_withdrawals")
     .select("*")
+    .eq("company_id", auth.companyId)
     .order("withdrawn_at", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(300);
@@ -264,7 +269,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const validation = await validateSaleIdsForProfile(auth.profile, saleIds);
+  const validation = await validateSaleIdsForProfile(auth.profile, auth.companyId, saleIds);
 
   if (validation.error) {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
@@ -272,6 +277,7 @@ export async function POST(request: Request) {
 
   const duplicatedSaleIds = await findAlreadyWithdrawnSaleIds(
     validation.saleIds,
+    auth.companyId,
     scope,
     sellerName || undefined
   );
@@ -288,6 +294,7 @@ export async function POST(request: Request) {
   const { data, error } = await supabase
     .from("cash_withdrawals")
     .insert({
+      company_id: auth.companyId,
       amount,
       withdrawn_at: withdrawnAt,
       note: cleanText(body.note) || "Saque do caixa",
@@ -296,6 +303,7 @@ export async function POST(request: Request) {
       seller_name: sellerName
     })
     .select("*")
+    .eq("company_id", auth.companyId)
     .single();
 
   if (error) {
@@ -356,6 +364,7 @@ export async function PATCH(request: Request) {
   const { data, error } = await supabase
     .from("cash_withdrawals")
     .update({ note: cleanText(body.note) || "Saque do caixa" })
+    .eq("company_id", auth.companyId)
     .eq("id", id)
     .select("*")
     .maybeSingle();

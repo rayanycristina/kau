@@ -160,12 +160,13 @@ export function mapProduct(
 
 export async function loadProductDetail(
   admin: ProductAdminClient,
-  productId: string
+  productId: string,
+  companyId: string
 ): Promise<{ error: ProductQueryError } | { product: Product | null }> {
   const [productResult, costsResult, kitsResult] = await Promise.all([
-    admin.from("products").select(productSelect).eq("id", productId).maybeSingle(),
-    admin.from("product_cost_history").select(productCostSelect).eq("product_id", productId).order("effective_from", { ascending: false }).order("created_at", { ascending: false }),
-    admin.from("product_kits").select(productKitSelect).eq("product_id", productId).order("quantity").order("name")
+    admin.from("products").select(productSelect).eq("company_id", companyId).eq("id", productId).maybeSingle(),
+    admin.from("product_cost_history").select(productCostSelect).eq("company_id", companyId).eq("product_id", productId).order("effective_from", { ascending: false }).order("created_at", { ascending: false }),
+    admin.from("product_kits").select(productKitSelect).eq("company_id", companyId).eq("product_id", productId).order("quantity").order("name")
   ]);
   const error = productResult.error || costsResult.error || kitsResult.error;
   if (error) return { error } as const;

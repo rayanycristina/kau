@@ -12,12 +12,12 @@ const campaignSchemaMissing = (error: { code?: string; message?: string } | null
 const softDeleteSchemaMissing = (error: { code?: string; message?: string } | null) => ["42703", "PGRST204"].includes(String(error?.code || "")) || /deleted_at/i.test(String(error?.message || ""));
 const saleFields = "id,customer_name,customer_phone,created_at,received_date,payment_date,payment_status,delivery_status,order_status,total_amount,operation_commission_amount,operation_commission_percent,sale_platform,state,seller_name";
 
-async function fetchSales(admin: ReturnType<typeof getSupabaseAdminClient>, includeCampaigns: boolean) {
+async function fetchSales(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, includeCampaigns: boolean) {
   const rows: Record<string, unknown>[] = [];
   const pageSize = 1000;
   const fields: string = includeCampaigns ? `${saleFields},campaign_id,campaigns(name)` : saleFields;
   for (let from = 0; ; from += pageSize) {
-    const page = await admin.from("sales").select(fields).is("deleted_at", null).order("created_at", { ascending: false }).range(from, from + pageSize - 1);
+    const page = await admin.from("sales").select(fields).eq("company_id", companyId).is("deleted_at", null).order("created_at", { ascending: false }).range(from, from + pageSize - 1);
     if (page.error && softDeleteSchemaMissing(page.error)) {
       return { data: rows, error: new Error("O campo deleted_at é necessário para calcular Capital em Giro com segurança.") };
     }
@@ -48,14 +48,14 @@ export async function GET(request: Request) {
   const start = date(url.searchParams.get("start"), `${today.slice(0, 7)}-01`); const end = date(url.searchParams.get("end"), today);
   const admin = getSupabaseAdminClient();
   const [initialSalesResult, settingsResult, campaignsResult] = await Promise.all([
-    fetchSales(admin, true),
-    admin.from("capital_cycle_settings").select("delinquency_days_after_delivery").eq("id", 1).maybeSingle(),
-    admin.from("campaigns").select("id,name,status").order("name")
+    fetchSales(admin, auth.companyId, true),
+    admin.from("capital_cycle_settings").select("delinquency_days_after_delivery").eq("company_id", auth.companyId).eq("id", 1).maybeSingle(),
+    admin.from("campaigns").select("id,name,status").eq("company_id", auth.companyId).order("name")
   ]);
   let salesResult = initialSalesResult;
   let campaignSetupRequired = campaignSchemaMissing(campaignsResult.error);
   if (salesResult.error && campaignSchemaMissing(salesResult.error)) {
-    salesResult = await fetchSales(admin, false);
+    salesResult = await fetchSales(admin, auth.companyId, false);
     campaignSetupRequired = true;
   }
   if (salesResult.error) return NextResponse.json({ error: salesResult.error.message }, { status: 500 });
@@ -77,7 +77,7 @@ export async function PATCH(request: Request) {
   const raw = body.delinquencyDaysAfterDelivery;
   const value = raw == null ? null : Number(raw);
   if (value !== null && (!Number.isInteger(value) || value <= 0 || value > 3650)) return NextResponse.json({ error: "Informe uma quantidade inteira e positiva de dias." }, { status: 400 });
-  const result = await getSupabaseAdminClient().from("capital_cycle_settings").upsert({ id: 1, delinquency_days_after_delivery: value, updated_by: auth.user.id }, { onConflict: "id" }).select("delinquency_days_after_delivery").single();
+  const result = await getSupabaseAdminClient().from("capital_cycle_settings").upsert({ company_id: auth.companyId, id: 1, delinquency_days_after_delivery: value, updated_by: auth.user.id }, { onConflict: "company_id,id" }).select("delinquency_days_after_delivery").single();
   if (result.error && settingsMissing(result.error)) return NextResponse.json({ error: "A migration 032 precisa ser aplicada para salvar esta configuração.", setupRequired: true }, { status: 409 });
   if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
   return NextResponse.json({ delinquencyDaysAfterDelivery: result.data.delinquency_days_after_delivery == null ? null : Number(result.data.delinquency_days_after_delivery) });

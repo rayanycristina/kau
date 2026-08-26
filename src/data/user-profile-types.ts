@@ -1,4 +1,19 @@
 export type UserRole = "admin" | "seller";
+export type CompanyRole = "owner" | "admin" | "seller" | "member";
+
+export type CompanySummary = {
+  id: string;
+  name: string;
+  slug: string;
+  status: "active" | "suspended";
+};
+
+export type CompanyMembership = {
+  companyId: string;
+  userId: string;
+  role: CompanyRole;
+  isActive: boolean;
+};
 
 export type UserProfile = {
   id: string;
@@ -10,6 +25,9 @@ export type UserProfile = {
   isActive: boolean;
   createdAt?: string;
   updatedAt?: string;
+  company?: CompanySummary;
+  companyRole?: CompanyRole;
+  isPlatformAdmin?: boolean;
 };
 
 export type UserProfileInput = {

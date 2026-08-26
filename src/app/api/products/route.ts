@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   const includedProductId = rawIncludedProduct ? validUuid(rawIncludedProduct) : null;
   if (rawIncludedProduct && !includedProductId) return NextResponse.json({ error: "Produto histórico inválido." }, { status: 400 });
   const activeOnly = optionsOnly || !canViewCosts;
-  let productsQuery = admin.from("products").select(productSelect).order("name");
+  let productsQuery = admin.from("products").select(productSelect).eq("company_id", auth.companyId).order("name");
   if (activeOnly) {
     productsQuery = includedProductId
       ? productsQuery.or(`and(status.eq.active,available_for_new_sales.eq.true),id.eq.${includedProductId}`)
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
   }
 
   const productIds = rows.map((row) => row.id);
-  let kitsQuery = admin.from("product_kits").select(productKitSelect).in("product_id", productIds).order("quantity").order("name");
+  let kitsQuery = admin.from("product_kits").select(productKitSelect).eq("company_id", auth.companyId).in("product_id", productIds).order("quantity").order("name");
   if (activeOnly) {
     kitsQuery = includedProductId
       ? kitsQuery.or(`is_active.eq.true,product_id.eq.${includedProductId}`)
@@ -66,7 +66,7 @@ export async function GET(request: Request) {
   const [kitsResult, costsResult] = await Promise.all([
     kitsQuery,
     canViewCosts
-      ? admin.from("product_cost_history").select(productCostSelect).in("product_id", productIds).order("effective_from", { ascending: false }).order("created_at", { ascending: false })
+      ? admin.from("product_cost_history").select(productCostSelect).eq("company_id", auth.companyId).in("product_id", productIds).order("effective_from", { ascending: false }).order("created_at", { ascending: false })
       : Promise.resolve({ data: [] as ProductCostRow[], error: null })
   ]);
   const error = kitsResult.error || costsResult.error;
@@ -131,7 +131,7 @@ export async function POST(request: Request) {
   const rpcValue = result.data as Record<string, unknown> | null;
   const productId = typeof rpcValue?.product_id === "string" ? rpcValue.product_id : null;
   if (!productId) return NextResponse.json({ error: "O produto foi criado, mas não foi possível confirmar seu identificador." }, { status: 500 });
-  const detail = await loadProductDetail(admin, productId);
+  const detail = await loadProductDetail(admin, productId, auth.companyId);
   if ("error" in detail) {
     if (isProductSetupError(detail.error)) return productSetupResponse();
     return NextResponse.json({ error: detail.error.message }, { status: 500 });

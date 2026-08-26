@@ -20,8 +20,8 @@ export async function PATCH(request: Request) {
 
   const admin = getSupabaseAdminClient();
   const [expenseResult, campaignResult] = await Promise.all([
-    admin.from("expenses").select("id,category,campaign_id").eq("id", expenseId).maybeSingle(),
-    admin.from("campaigns").select("id,status").eq("id", campaignId).maybeSingle()
+    admin.from("expenses").select("id,category,campaign_id").eq("company_id", auth.companyId).eq("id", expenseId).maybeSingle(),
+    admin.from("campaigns").select("id,status").eq("company_id", auth.companyId).eq("id", campaignId).maybeSingle()
   ]);
   if (expenseResult.error || campaignResult.error) {
     const message = expenseResult.error?.message || campaignResult.error?.message || "Não foi possível validar a atribuição.";
@@ -32,7 +32,7 @@ export async function PATCH(request: Request) {
   if (expenseResult.data.campaign_id) return NextResponse.json({ error: "Esta despesa já possui uma campanha atribuída." }, { status: 409 });
   if (!campaignResult.data || campaignResult.data.status === "archived") return NextResponse.json({ error: "A campanha selecionada não está disponível." }, { status: 409 });
 
-  const updated = await admin.from("expenses").update({ campaign_id: campaignId }).eq("id", expenseId).is("campaign_id", null).eq("category", "traffic").select("id,campaign_id").maybeSingle();
+  const updated = await admin.from("expenses").update({ campaign_id: campaignId }).eq("company_id", auth.companyId).eq("id", expenseId).is("campaign_id", null).eq("category", "traffic").select("id,campaign_id").maybeSingle();
   if (updated.error) return NextResponse.json({ error: updated.error.message }, { status: 500 });
   if (!updated.data) return NextResponse.json({ error: "A despesa foi alterada por outro usuário. Atualize a tela e tente novamente." }, { status: 409 });
   return NextResponse.json({ expenseId: String(updated.data.id), campaignId: String(updated.data.campaign_id) });

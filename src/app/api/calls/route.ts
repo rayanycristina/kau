@@ -21,6 +21,7 @@ export async function GET() {
   let query = supabase
     .from("call_records")
     .select("*")
+    .eq("company_id", auth.companyId)
     .order("started_at", { ascending: false })
     .limit(200);
 
@@ -67,6 +68,7 @@ export async function POST(request: Request) {
   const { data, error } = await supabase
     .from("call_records")
     .insert({
+      company_id: auth.companyId,
       seller_id: auth.profile.id,
       seller_name: sellerName,
       customer_name: customerName,
