@@ -82,7 +82,7 @@ async function fetchExpenses(
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await admin
       .from("expenses")
-      .select("id,description,amount,expense_date,expense_tax_items(id,amount)")
+      .select("id,description,amount,expense_date,expense_tax_items!expense_tax_items_company_expense_fkey(id,amount)")
       .eq("company_id", companyId)
       .gte("expense_date", start)
       .lte("expense_date", end)
