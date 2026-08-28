@@ -10,7 +10,12 @@ const campaignStatuses: CampaignStatus[] = ["active", "paused", "archived"];
 function text(value: unknown) { return typeof value === "string" && value.trim() ? value.trim().replace(/\s+/g, " ") : null; }
 function date(value: unknown) { const result = text(value); return result && /^\d{4}-\d{2}-\d{2}$/.test(result) ? result : null; }
 function uuid(value: unknown) { const result = text(value); return result && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result) ? result : null; }
-function missing(error: { code?: string; message?: string } | null) { return error?.code === "42P01" || /ad_accounts|campaigns|schema cache/i.test(String(error?.message || "")); }
+type DatabaseError = { code?: string; message?: string; details?: string; hint?: string } | null;
+const missingStructureCodes = new Set(["42P01", "42703", "PGRST200", "PGRST204", "PGRST205"]);
+function missing(error: DatabaseError) { return Boolean(error?.code && missingStructureCodes.has(error.code)); }
+function logCampaignError(operation: string, error: DatabaseError) {
+  console.error(`[campaigns] ${operation}`, { code: error?.code, message: error?.message, details: error?.details, hint: error?.hint });
+}
 const validAccountStatuses = ["active", "inactive"] as const;
 
 async function findAccount(admin: ReturnType<typeof getSupabaseAdminClient>, companyId: string, id: string) {
@@ -29,23 +34,29 @@ function mapCampaign(row: Record<string, unknown>): Campaign {
 export async function GET(request: Request) {
   const auth = await requireAuth();
   if ("error" in auth) return auth.error;
-  if (!hasSupabaseAdminConfig()) return NextResponse.json({ accounts: [], campaigns: [], setupRequired: true });
+  if (!hasSupabaseAdminConfig()) return NextResponse.json({ accounts: [], campaigns: [], setupRequired: true, error: "Campanhas estão temporariamente indisponíveis. Tente novamente em instantes." });
   const admin = getSupabaseAdminClient();
   const status = new URL(request.url).searchParams.get("status");
   const [accountsResult, campaignsResult] = await Promise.all([
     admin.from("ad_accounts").select("*").eq("company_id", auth.companyId).order("name"),
-    (() => { let query = admin.from("campaigns").select("*,ad_accounts(name)").eq("company_id", auth.companyId).order("created_at", { ascending: false }); if (status === "active") query = query.eq("status", "active"); return query; })()
+    (() => { let query = admin.from("campaigns").select("*,ad_accounts!campaigns_company_ad_account_fkey(name)").eq("company_id", auth.companyId).order("created_at", { ascending: false }); if (status === "active") query = query.eq("status", "active"); return query; })()
   ]);
   const error = accountsResult.error || campaignsResult.error;
-  if (error && missing(error)) return NextResponse.json({ accounts: [], campaigns: [], setupRequired: true });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error && missing(error)) {
+    logCampaignError("estrutura indisponível ao carregar", error);
+    return NextResponse.json({ accounts: [], campaigns: [], setupRequired: true, error: "Campanhas estão temporariamente indisponíveis. Tente novamente em instantes." });
+  }
+  if (error) {
+    logCampaignError("falha ao carregar", error);
+    return NextResponse.json({ error: "Não foi possível carregar Campanhas no momento." }, { status: 500 });
+  }
   return NextResponse.json({ accounts: (accountsResult.data || []).map((row) => mapAccount(row)), campaigns: (campaignsResult.data || []).map((row) => mapCampaign(row)), setupRequired: false }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
 export async function POST(request: Request) {
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
-  if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Supabase admin não configurado." }, { status: 503 });
+  if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Campanhas estão temporariamente indisponíveis. Tente novamente em instantes." }, { status: 503 });
   const body = await request.json().catch(() => ({}));
   const kind = body.kind === "account" ? "account" : "campaign";
   const name = text(body.name);
@@ -55,9 +66,15 @@ export async function POST(request: Request) {
     const platform = platforms.includes(body.platform) ? body.platform as AdPlatform : null;
     if (!platform) return NextResponse.json({ error: "Selecione uma plataforma de anúncio válida." }, { status: 400 });
     const result = await admin.from("ad_accounts").insert({ company_id: auth.companyId, name, platform, external_account_id: text(body.externalAccountId), status: "active", created_by: auth.user.id }).select("*").single();
-    if (result.error && missing(result.error)) return NextResponse.json({ error: "A migration 031 precisa ser aplicada para ativar Campanhas.", setupRequired: true }, { status: 409 });
+    if (result.error && missing(result.error)) {
+      logCampaignError("estrutura indisponível ao criar conta", result.error);
+      return NextResponse.json({ error: "Campanhas estão temporariamente indisponíveis. Tente novamente em instantes.", setupRequired: true }, { status: 409 });
+    }
     if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma conta com esse nome e plataforma." }, { status: 409 });
-    if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
+    if (result.error) {
+      logCampaignError("falha ao criar conta", result.error);
+      return NextResponse.json({ error: "Não foi possível criar a conta de anúncio no momento." }, { status: 500 });
+    }
     return NextResponse.json({ account: mapAccount(result.data) }, { status: 201 });
   }
   const adPlatform = platforms.includes(body.adPlatform) ? body.adPlatform as AdPlatform : null;
@@ -70,29 +87,41 @@ export async function POST(request: Request) {
   if (body.adAccountId && !adAccountId) return NextResponse.json({ error: "Selecione uma conta de anúncio válida." }, { status: 400 });
   if (adAccountId) {
     const accountResult = await findAccount(admin, auth.companyId, adAccountId);
-    if (accountResult.error) return NextResponse.json({ error: accountResult.error.message }, { status: 500 });
+    if (accountResult.error) {
+      logCampaignError("falha ao validar conta para criação", accountResult.error);
+      return NextResponse.json({ error: "Não foi possível vincular a conta de anúncio no momento." }, { status: 500 });
+    }
     if (!accountResult.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     if (accountResult.data.status !== "active") return NextResponse.json({ error: "Selecione uma conta de anúncio ativa." }, { status: 409 });
     if (accountResult.data.platform !== adPlatform) return NextResponse.json({ error: "A plataforma da campanha deve ser a mesma da conta de anúncio." }, { status: 409 });
   }
-  const result = await admin.from("campaigns").insert({ company_id: auth.companyId, name, ad_account_id: adAccountId, ad_platform: adPlatform, product_name: text(body.productName), status, external_campaign_id: text(body.externalCampaignId), start_date: startDate, end_date: endDate, notes: text(body.notes), created_by: auth.user.id }).select("*,ad_accounts(name)").single();
-  if (result.error && missing(result.error)) return NextResponse.json({ error: "A migration 031 precisa ser aplicada para ativar Campanhas.", setupRequired: true }, { status: 409 });
+  const result = await admin.from("campaigns").insert({ company_id: auth.companyId, name, ad_account_id: adAccountId, ad_platform: adPlatform, product_name: text(body.productName), status, external_campaign_id: text(body.externalCampaignId), start_date: startDate, end_date: endDate, notes: text(body.notes), created_by: auth.user.id }).select("*,ad_accounts!campaigns_company_ad_account_fkey(name)").single();
+  if (result.error && missing(result.error)) {
+    logCampaignError("estrutura indisponível ao criar campanha", result.error);
+    return NextResponse.json({ error: "Campanhas estão temporariamente indisponíveis. Tente novamente em instantes.", setupRequired: true }, { status: 409 });
+  }
   if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma campanha com esse nome nesta conta." }, { status: 409 });
-  if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
+  if (result.error) {
+    logCampaignError("falha ao criar campanha", result.error);
+    return NextResponse.json({ error: "Não foi possível criar a campanha no momento." }, { status: 500 });
+  }
   return NextResponse.json({ campaign: mapCampaign(result.data) }, { status: 201 });
 }
 
 export async function PATCH(request: Request) {
   const auth = await requireAdmin();
   if ("error" in auth) return auth.error;
-  if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Supabase admin não configurado." }, { status: 503 });
+  if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Campanhas estão temporariamente indisponíveis. Tente novamente em instantes." }, { status: 503 });
   const body = await request.json().catch(() => ({}));
   const id = uuid(body.id);
   if (!id) return NextResponse.json({ error: "Informe um registro válido." }, { status: 400 });
   const admin = getSupabaseAdminClient();
   if (body.kind === "account") {
     const currentResult = await findAccount(admin, auth.companyId, id);
-    if (currentResult.error) return NextResponse.json({ error: currentResult.error.message }, { status: 500 });
+    if (currentResult.error) {
+      logCampaignError("falha ao carregar conta para edição", currentResult.error);
+      return NextResponse.json({ error: "Não foi possível carregar a conta de anúncio no momento." }, { status: 500 });
+    }
     if (!currentResult.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     const name = body.name === undefined ? String(currentResult.data.name) : text(body.name);
     const platform = body.platform === undefined ? currentResult.data.platform as AdPlatform : platforms.includes(body.platform) ? body.platform as AdPlatform : null;
@@ -102,19 +131,28 @@ export async function PATCH(request: Request) {
     if (!status) return NextResponse.json({ error: "Selecione um status válido para a conta." }, { status: 400 });
     if (platform !== currentResult.data.platform) {
       const linked = await admin.from("campaigns").select("id").eq("company_id", auth.companyId).eq("ad_account_id", id).limit(1);
-      if (linked.error) return NextResponse.json({ error: linked.error.message }, { status: 500 });
+      if (linked.error) {
+        logCampaignError("falha ao validar campanhas vinculadas", linked.error);
+        return NextResponse.json({ error: "Não foi possível validar as campanhas vinculadas no momento." }, { status: 500 });
+      }
       if ((linked.data || []).length) return NextResponse.json({ error: "A plataforma não pode ser alterada enquanto a conta possuir campanhas vinculadas." }, { status: 409 });
     }
     const updates = { name, platform, status, ...(body.externalAccountId !== undefined ? { external_account_id: text(body.externalAccountId) } : {}) };
     const result = await admin.from("ad_accounts").update(updates).eq("company_id", auth.companyId).eq("id", id).select("*").maybeSingle();
     if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma conta com esse nome e plataforma." }, { status: 409 });
-    if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
+    if (result.error) {
+      logCampaignError("falha ao atualizar conta", result.error);
+      return NextResponse.json({ error: "Não foi possível atualizar a conta de anúncio no momento." }, { status: 500 });
+    }
     if (!result.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     return NextResponse.json({ account: mapAccount(result.data) });
   }
 
   const currentResult = await admin.from("campaigns").select("id,name,ad_account_id,ad_platform,product_name,status,external_campaign_id,start_date,end_date,notes").eq("company_id", auth.companyId).eq("id", id).maybeSingle();
-  if (currentResult.error) return NextResponse.json({ error: currentResult.error.message }, { status: 500 });
+  if (currentResult.error) {
+    logCampaignError("falha ao carregar campanha para edição", currentResult.error);
+    return NextResponse.json({ error: "Não foi possível carregar a campanha no momento." }, { status: 500 });
+  }
   if (!currentResult.data) return NextResponse.json({ error: "Campanha não encontrada." }, { status: 404 });
   const name = body.name === undefined ? String(currentResult.data.name) : text(body.name);
   const status = body.status === undefined ? currentResult.data.status as CampaignStatus : campaignStatuses.includes(body.status) ? body.status as CampaignStatus : null;
@@ -135,7 +173,10 @@ export async function PATCH(request: Request) {
   if (!adPlatform) return NextResponse.json({ error: "Selecione uma plataforma de anúncio válida." }, { status: 400 });
   if (adAccountId) {
     const accountResult = await findAccount(admin, auth.companyId, adAccountId);
-    if (accountResult.error) return NextResponse.json({ error: accountResult.error.message }, { status: 500 });
+    if (accountResult.error) {
+      logCampaignError("falha ao validar conta para edição", accountResult.error);
+      return NextResponse.json({ error: "Não foi possível vincular a conta de anúncio no momento." }, { status: 500 });
+    }
     if (!accountResult.data) return NextResponse.json({ error: "Conta de anúncio não encontrada." }, { status: 404 });
     const isCurrentHistoricalAccount = currentResult.data.ad_account_id === adAccountId;
     if (accountResult.data.status !== "active" && !isCurrentHistoricalAccount) return NextResponse.json({ error: "Selecione uma conta de anúncio ativa." }, { status: 409 });
@@ -154,9 +195,12 @@ export async function PATCH(request: Request) {
     end_date: endDate,
     notes: body.notes === undefined ? currentResult.data.notes : text(body.notes)
   };
-  const result = await admin.from("campaigns").update(updates).eq("company_id", auth.companyId).eq("id", id).select("*,ad_accounts(name)").maybeSingle();
+  const result = await admin.from("campaigns").update(updates).eq("company_id", auth.companyId).eq("id", id).select("*,ad_accounts!campaigns_company_ad_account_fkey(name)").maybeSingle();
   if (result.error?.code === "23505") return NextResponse.json({ error: "Já existe uma campanha com esse nome nesta conta." }, { status: 409 });
-  if (result.error) return NextResponse.json({ error: result.error.message }, { status: 500 });
+  if (result.error) {
+    logCampaignError("falha ao atualizar campanha", result.error);
+    return NextResponse.json({ error: "Não foi possível atualizar a campanha no momento." }, { status: 500 });
+  }
   if (!result.data) return NextResponse.json({ error: "Campanha não encontrada." }, { status: 404 });
   return NextResponse.json({ campaign: mapCampaign(result.data) });
 }

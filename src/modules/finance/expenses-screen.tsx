@@ -262,7 +262,7 @@ export function ExpensesScreen() {
     <div className="space-y-4 pb-10 pt-2">
       <FinanceHeader periodLabel={periodLabel} setupRequired={setupRequired} onCreate={openCreate} />
       {setupRequired ? <ExpenseSetupNotice /> : null}
-      {taxSetupRequired ? <ProductMessage tone="error" message="A migration 023 precisa ser aplicada para ativar os tributos automáticos da Meta Ads." /> : null}
+      {taxSetupRequired ? <ProductMessage tone="error" message="Não foi possível carregar os tributos automáticos no momento." /> : null}
       {error ? <ProductMessage tone="error" message={error} /> : null}
       {success ? <ProductMessage tone="success" message={success} /> : null}
       <FinanceMetrics totals={totals} isLoading={isLoading} />

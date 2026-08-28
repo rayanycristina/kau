@@ -41,7 +41,10 @@ async function validateCampaign(admin: ReturnType<typeof getSupabaseAdminClient>
   const campaignId = cleanUuid(value);
   if (!campaignId) return { error: "Selecione uma campanha válida." } as const;
   const result = await admin.from("campaigns").select("id,status").eq("company_id", companyId).eq("id", campaignId).maybeSingle();
-  if (result.error) return { error: /campaigns|schema cache/i.test(result.error.message) ? "A migration 031 precisa ser aplicada antes de vincular campanhas." : result.error.message } as const;
+  if (result.error) {
+    console.error("[expenses] falha ao validar campanha", { code: result.error.code, message: result.error.message, details: result.error.details, hint: result.error.hint });
+    return { error: "Não foi possível vincular a campanha no momento." } as const;
+  }
   if (!result.data || result.data.status === "archived") return { error: "A campanha selecionada não está disponível." } as const;
   return { campaignId } as const;
 }
@@ -134,12 +137,27 @@ function mapExpense(row: Record<string, unknown>): Expense {
   };
 }
 
-function isMissingExpensesTable(error: { message?: string; code?: string } | null) {
-  return error?.code === "42P01" || /public\.expenses|relation.*expenses|schema cache.*expenses/i.test(String(error?.message ?? ""));
+function isMissingExpensesTable(error: { message?: string; code?: string; details?: string; hint?: string } | null) {
+  const code = String(error?.code || "");
+  if (!["42P01", "PGRST204", "PGRST205"].includes(code)) return false;
+  return /(?:public\.)?expenses\b/i.test([error?.message, error?.details, error?.hint].filter(Boolean).join(" "));
 }
 
-function isMissingTaxTable(error: { message?: string; code?: string } | null) {
-  return error?.code === "42P01" || /expense_tax_items|relationship.*expense_tax_items|schema cache/i.test(String(error?.message ?? ""));
+type ExpenseDatabaseError = { message?: string; code?: string; details?: string; hint?: string } | null;
+
+function isMissingTaxTable(error: ExpenseDatabaseError) {
+  const code = String(error?.code || "");
+  if (code === "PGRST200") return true;
+  if (!["42P01", "PGRST204", "PGRST205"].includes(code)) return false;
+  return /expense_tax_items/i.test([error?.message, error?.details, error?.hint].filter(Boolean).join(" "));
+}
+
+function logTaxError(operation: string, error: ExpenseDatabaseError) {
+  console.error(`[expenses:taxes] ${operation}`, { code: error?.code, message: error?.message, details: error?.details, hint: error?.hint });
+}
+
+function taxProcessingErrorResponse() {
+  return NextResponse.json({ error: "Não foi possível processar os tributos desta despesa no momento." }, { status: 500 });
 }
 
 function isMissingGuaranteeTable(error: { message?: string; code?: string } | null) {
@@ -181,7 +199,7 @@ function expensesUnavailableResponse() {
 }
 
 function taxesUnavailableResponse() {
-  return NextResponse.json({ error: "A estrutura de tributos ainda precisa da migration supabase/023_expense_tax_items.sql.", taxSetupRequired: true }, { status: 409 });
+  return NextResponse.json({ error: "Não foi possível carregar os tributos automáticos no momento.", taxSetupRequired: true }, { status: 409 });
 }
 
 function taxPayload(companyId: string, expenseId: string, items: Array<Omit<ExpenseTaxItem, "id" | "createdAt" | "enabled">>) {
@@ -210,9 +228,10 @@ export async function GET(request: Request) {
     return query;
   };
 
-  let { data, error } = await buildQuery("*,expense_tax_items(*)");
+  let { data, error } = await buildQuery("*,expense_tax_items!expense_tax_items_company_expense_fkey(*)");
   let taxSetupRequired = false;
   if (error && isMissingTaxTable(error)) {
+    logTaxError("estrutura indisponível ao carregar despesas", error);
     taxSetupRequired = true;
     const fallback = await buildQuery("*");
     data = fallback.data;
@@ -220,7 +239,8 @@ export async function GET(request: Request) {
   }
   if (error) {
     if (isMissingExpensesTable(error)) return NextResponse.json({ configured: true, setupRequired: true, expenses: [], total: 0, message: "O módulo de Despesas ainda precisa da migration supabase/022_expenses.sql." });
-    return NextResponse.json({ error: error.message, expenses: [] }, { status: 500 });
+    console.error("[expenses] falha ao carregar despesas", { code: error.code, message: error.message, details: error.details, hint: error.hint });
+    return NextResponse.json({ error: "Não foi possível carregar as despesas no momento.", expenses: [] }, { status: 500 });
   }
 
   const expenses = ((data ?? []) as unknown as Record<string, unknown>[]).map((row) => mapExpense(row));
@@ -279,7 +299,10 @@ export async function POST(request: Request) {
   if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
   if (normalized.taxItems.length) {
     const check = await admin.from("expense_tax_items").select("id").eq("company_id", auth.companyId).limit(1);
-    if (check.error) return isMissingTaxTable(check.error) ? taxesUnavailableResponse() : NextResponse.json({ error: check.error.message }, { status: 500 });
+    if (check.error) {
+      logTaxError("falha ao validar estrutura antes da criação", check.error);
+      return isMissingTaxTable(check.error) ? taxesUnavailableResponse() : taxProcessingErrorResponse();
+    }
   }
 
   const { data, error } = await admin.from("expenses").insert({ company_id: auth.companyId, ...normalized.expense, ...(campaign.campaignId ? { campaign_id: campaign.campaignId } : {}), created_by: auth.user.id }).select("*").single();
@@ -287,8 +310,9 @@ export async function POST(request: Request) {
   if (normalized.taxItems.length) {
     const taxInsert = await admin.from("expense_tax_items").insert(taxPayload(auth.companyId, String(data.id), normalized.taxItems)).select("*");
     if (taxInsert.error) {
+      logTaxError("falha ao criar tributos", taxInsert.error);
       await admin.from("expenses").delete().eq("company_id", auth.companyId).eq("id", data.id);
-      return NextResponse.json({ error: taxInsert.error.message }, { status: 500 });
+      return taxProcessingErrorResponse();
     }
     data.expense_tax_items = taxInsert.data;
   }
@@ -328,7 +352,10 @@ export async function PATCH(request: Request) {
   if ("error" in campaign) return NextResponse.json({ error: campaign.error }, { status: 409 });
   const taxCheck = await admin.from("expense_tax_items").select("id").eq("company_id", auth.companyId).eq("expense_id", id).limit(1);
   const taxTableAvailable = !taxCheck.error;
-  if (taxCheck.error && !isMissingTaxTable(taxCheck.error)) return NextResponse.json({ error: taxCheck.error.message }, { status: 500 });
+  if (taxCheck.error) {
+    logTaxError("falha ao validar tributos antes da edição", taxCheck.error);
+    if (!isMissingTaxTable(taxCheck.error)) return taxProcessingErrorResponse();
+  }
   if (!taxTableAvailable && normalized.taxItems.length) return taxesUnavailableResponse();
 
   const updatePayload = { ...normalized.expense, ...(body.campaignId !== undefined ? { campaign_id: campaign.campaignId } : {}) };
@@ -338,10 +365,16 @@ export async function PATCH(request: Request) {
 
   if (taxTableAvailable) {
     const removed = await admin.from("expense_tax_items").delete().eq("company_id", auth.companyId).eq("expense_id", id);
-    if (removed.error) return NextResponse.json({ error: removed.error.message }, { status: 500 });
+    if (removed.error) {
+      logTaxError("falha ao substituir tributos", removed.error);
+      return taxProcessingErrorResponse();
+    }
     if (normalized.taxItems.length) {
       const inserted = await admin.from("expense_tax_items").insert(taxPayload(auth.companyId, id, normalized.taxItems)).select("*");
-      if (inserted.error) return NextResponse.json({ error: inserted.error.message }, { status: 500 });
+      if (inserted.error) {
+        logTaxError("falha ao salvar tributos atualizados", inserted.error);
+        return taxProcessingErrorResponse();
+      }
       data.expense_tax_items = inserted.data;
     }
   }

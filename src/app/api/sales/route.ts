@@ -187,8 +187,8 @@ function isSalesPlatformConstraintError(error: { message?: string } | null | und
   return /sales_sale_platform_check|sale_platform.*check constraint/i.test(String(error?.message || ""));
 }
 
-function isCampaignSchemaError(error: { message?: string } | null | undefined) {
-  return /campaign_id|public\.campaigns|relation ['"]?campaigns|schema cache/i.test(String(error?.message || ""));
+function isCampaignSchemaError(error: { code?: string } | null | undefined) {
+  return ["42P01", "42703", "PGRST200", "PGRST204", "PGRST205"].includes(String(error?.code || ""));
 }
 
 function isSalesSoftDeleteSchemaError(error: { code?: string; message?: string } | null | undefined) {
@@ -299,7 +299,10 @@ async function validateCampaign(supabase: ReturnType<typeof getSupabaseServerCli
   const campaignId = cleanUuid(value);
   if (!campaignId) return { error: "Selecione uma campanha válida." } as const;
   const result = await supabase.from("campaigns").select("id,status").eq("company_id", companyId).eq("id", campaignId).maybeSingle();
-  if (result.error) return { error: isCampaignSchemaError(result.error) ? "A migration 031 precisa ser aplicada antes de vincular campanhas." : result.error.message } as const;
+  if (result.error) {
+    console.error("[sales] falha ao validar campanha", { code: result.error.code, message: result.error.message, details: result.error.details, hint: result.error.hint });
+    return { error: "Não foi possível vincular a campanha no momento." } as const;
+  }
   if (!result.data || result.data.status === "archived") return { error: "A campanha selecionada não está disponível." } as const;
   return { campaignId } as const;
 }
@@ -524,7 +527,8 @@ export async function POST(request: Request) {
     } else if (isSalesPlatformConstraintError(error)) {
       return NextResponse.json({ error: "A migration 029 precisa ser aplicada antes de usar Venda Manual." }, { status: 409 });
     } else if (isCampaignSchemaError(error)) {
-      return NextResponse.json({ error: "A migration 031 precisa ser aplicada antes de vincular campanhas." }, { status: 409 });
+      console.error("[sales] estrutura de campanha indisponível ao criar venda", { code: error.code, message: error.message, details: error.details, hint: error.hint });
+      return NextResponse.json({ error: "Não foi possível vincular a campanha no momento." }, { status: 409 });
     } else if (isProductDomainSchemaError(error)) {
       return NextResponse.json({ error: "A migration 034 precisa ser aplicada antes de registrar custos da Venda Manual.", setupRequired: true }, { status: 409 });
     } else if (isSalesEnhancementSchemaError(error)) {
@@ -735,7 +739,8 @@ export async function PATCH(request: Request) {
     } else if (isSalesPlatformConstraintError(error)) {
       return NextResponse.json({ error: "A migration 029 precisa ser aplicada antes de usar Venda Manual." }, { status: 409 });
     } else if (isCampaignSchemaError(error)) {
-      return NextResponse.json({ error: "A migration 031 precisa ser aplicada antes de vincular campanhas." }, { status: 409 });
+      console.error("[sales] estrutura de campanha indisponível ao atualizar venda", { code: error.code, message: error.message, details: error.details, hint: error.hint });
+      return NextResponse.json({ error: "Não foi possível vincular a campanha no momento." }, { status: 409 });
     } else if (isProductDomainSchemaError(error)) {
       return NextResponse.json({ error: "A migration 034 precisa ser aplicada antes de salvar custos da Venda Manual.", setupRequired: true }, { status: 409 });
     } else if (isSalesEnhancementSchemaError(error)) {
